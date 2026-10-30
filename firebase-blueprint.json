@@ -1,0 +1,77 @@
+{
+  "entities": {
+    "Product": {
+      "title": "Product",
+      "description": "A clothing item displayed in Hamdar store catalogue",
+      "type": "object",
+      "properties": {
+        "store": {
+          "type": "string",
+          "enum": ["men", "women"],
+          "description": "Store category (men or women)"
+        },
+        "nameAr": {
+          "type": "string",
+          "maxLength": 120,
+          "description": "Product name in Arabic"
+        },
+        "nameEn": {
+          "type": "string",
+          "maxLength": 120,
+          "description": "Product name in English"
+        },
+        "price": {
+          "type": "string",
+          "maxLength": 30,
+          "description": "Optional price string (e.g. 25 or $25)"
+        },
+        "imageUrl": {
+          "type": "string",
+          "maxLength": 1000000,
+          "description": "Image URL or data storage URL"
+        },
+        "createdAt": {
+          "type": "number",
+          "description": "Creation timestamp epoch in ms"
+        }
+      },
+      "required": ["store", "nameAr", "nameEn"]
+    },
+    "SiteSettings": {
+      "title": "SiteSettings",
+      "description": "Global website settings document at settings/site",
+      "type": "object",
+      "properties": {
+        "banner": {
+          "type": "string",
+          "maxLength": 300,
+          "description": "Optional red announcement banner text"
+        },
+        "menPhone": {
+          "type": "string",
+          "maxLength": 30,
+          "description": "Phone number for men store"
+        },
+        "womenPhone": {
+          "type": "string",
+          "maxLength": 30,
+          "description": "Phone number for women store"
+        }
+      }
+    }
+  },
+  "firestore": {
+    "/products/{productId}": {
+      "schema": {
+        "$ref": "Product"
+      },
+      "description": "Public clothing catalogue products collection"
+    },
+    "/settings/site": {
+      "schema": {
+        "$ref": "SiteSettings"
+      },
+      "description": "Global site announcement and contact phone settings"
+    }
+  }
+}

@@ -1,0 +1,6 @@
+{
+  "name": "Hamdar Fashion Wear",
+  "description": "Bilingual mobile-first storefront for Hamdar Fashion Wear (Men & Women) in Saadnayel, Bekaa, Lebanon, featuring a hidden admin management panel.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
