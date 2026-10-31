@@ -105,6 +105,12 @@ body.admin-open {
   font-family: var(--font-body);
 }
 
+/* Strict LTR isolation to prevent Arabic RTL font reversal on brand words */
+.brand-logo, [dir="ltr"] {
+  direction: ltr !important;
+  unicode-bidi: isolate !important;
+}
+
 /* Subtle diagonal line pattern for placeholder tiles */
 .diagonal-placeholder {
   background-color: var(--card);

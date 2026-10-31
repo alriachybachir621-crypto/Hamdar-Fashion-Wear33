@@ -1,3 +1,8 @@
+/**
+ * @license
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
 import React, { useState, useEffect, useRef } from 'react';
 import {
   X,
@@ -9,7 +14,6 @@ import {
   Lock,
   Phone,
   Megaphone,
-  KeyRound,
   LogOut,
   Image as ImageIcon,
   Database,
@@ -17,16 +21,21 @@ import {
   EyeOff,
   AlertTriangle,
   Edit3,
+  Plus,
+  ArrowUp,
+  ArrowDown,
+  Sparkles,
+  ShoppingBag,
 } from 'lucide-react';
 import { Product, SiteSettings, StoreType } from '../types';
 import {
   addProduct,
   updateProduct,
   deleteProduct,
+  reorderProducts,
   updateSettings,
   adminLogin,
   adminLogout,
-  adminChangePassword,
   compressImageToBase64,
   isFirebaseLiveMode,
   getCurrentAuthUser,
@@ -60,6 +69,9 @@ function formatErrorMessage(err: any): string {
   if (code === 'unavailable') {
     return 'الخدمة غير متوفرة حالياً (unavailable).';
   }
+  if (message.includes('الرمز غلط') || code === 'auth/invalid-credential' || code === 'auth/wrong-password') {
+    return 'الرمز غلط';
+  }
   if (code) {
     return `فشلت العملية (${code}): ${message}`;
   }
@@ -84,79 +96,76 @@ export const AdminModal: React.FC<AdminModalProps> = ({
   // Lockout state
   const [lockoutSeconds, setLockoutSeconds] = useState(0);
 
-  // Add product form
-  const [newStore, setNewStore] = useState<StoreType>('men');
+  // Add product drawer / sheet
+  const [isAddOpen, setIsAddOpen] = useState(false);
   const [newNameAr, setNewNameAr] = useState('');
   const [newNameEn, setNewNameEn] = useState('');
+  const [newCategory, setNewCategory] = useState('');
   const [newPrice, setNewPrice] = useState('');
-  const [newImageFile, setNewImageFile] = useState<File | null>(null);
-  const [imagePreview, setImagePreview] = useState<string>('');
+  const [newImageBase64, setNewImageBase64] = useState<string>('');
+  const [isCompressingNew, setIsCompressingNew] = useState(false);
   const [isAdding, setIsAdding] = useState(false);
   const [addError, setAddError] = useState('');
   const [addSuccess, setAddSuccess] = useState(false);
   const addFileInputRef = useRef<HTMLInputElement>(null);
 
-  // Edit product modal state
+  // Quick edit modal state
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
   const [editNameAr, setEditNameAr] = useState('');
   const [editNameEn, setEditNameEn] = useState('');
+  const [editCategory, setEditCategory] = useState('');
   const [editPrice, setEditPrice] = useState('');
-  const [editImageUrl, setEditImageUrl] = useState('');
-  const [isUpdating, setIsUpdating] = useState(false);
+  const [editImageBase64, setEditImageBase64] = useState<string>('');
+  const [isCompressingEdit, setIsCompressingEdit] = useState(false);
+  const [isSavingEdit, setIsSavingEdit] = useState(false);
   const [editError, setEditError] = useState('');
   const [editSuccess, setEditSuccess] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
   const editFileInputRef = useRef<HTMLInputElement>(null);
 
-  // Settings form
-  const [bannerText, setBannerText] = useState(settings.banner);
-  const [menPhone, setMenPhone] = useState(settings.menPhone);
-  const [womenPhone, setWomenPhone] = useState(settings.womenPhone);
-  const [newAdminPassword, setNewAdminPassword] = useState('');
+  // Quick toggle inline loading tracker
+  const [togglingId, setTogglingId] = useState<string | null>(null);
+
+  // Settings form state
+  const [bannerText, setBannerText] = useState(settings.banner || '');
+  const [menPhoneVal, setMenPhoneVal] = useState(settings.menPhone || '76 320 279');
+  const [womenPhoneVal, setWomenPhoneVal] = useState(settings.womenPhone || '81 612 154');
+  const [heroImageBase64, setHeroImageBase64] = useState(settings.heroImage || '');
+  const [isCompressingHero, setIsCompressingHero] = useState(false);
   const [isSavingSettings, setIsSavingSettings] = useState(false);
   const [settingsError, setSettingsError] = useState('');
   const [settingsSuccess, setSettingsSuccess] = useState(false);
-  const [passwordStatus, setPasswordStatus] = useState('');
+  const heroFileInputRef = useRef<HTMLInputElement>(null);
 
-  // Lock body when admin panel is open, restore on close
+  // Lock body scroll whenever admin modal is open to eliminate iOS bounce
   useEffect(() => {
     if (isOpen) {
       document.body.classList.add('admin-open');
-      const originalOverflow = document.body.style.overflow;
-      const originalPosition = document.body.style.position;
-      const originalWidth = document.body.style.width;
-      const originalInset = document.body.style.top;
-
-      document.body.style.position = 'fixed';
-      document.body.style.inset = '0';
-      document.body.style.width = '100%';
-      document.body.style.overflow = 'hidden';
-
-      return () => {
-        document.body.classList.remove('admin-open');
-        document.body.style.position = originalPosition;
-        document.body.style.inset = originalInset;
-        document.body.style.width = originalWidth;
-        document.body.style.overflow = originalOverflow;
-      };
+    } else {
+      document.body.classList.remove('admin-open');
     }
+    return () => {
+      document.body.classList.remove('admin-open');
+    };
   }, [isOpen]);
 
-  // Lockout timer ticker
+  // Sync settings when props change
+  useEffect(() => {
+    setBannerText(settings.banner || '');
+    setMenPhoneVal(settings.menPhone || '76 320 279');
+    setWomenPhoneVal(settings.womenPhone || '81 612 154');
+    setHeroImageBase64(settings.heroImage || '');
+  }, [settings]);
+
+  // Check lockout on mount and interval
   useEffect(() => {
     const checkLockout = () => {
-      const stored = localStorage.getItem(LOCKOUT_KEY);
-      if (stored) {
-        const lockoutTime = parseInt(stored, 10);
-        const remaining = Math.ceil((lockoutTime - Date.now()) / 1000);
-        if (remaining > 0) {
-          setLockoutSeconds(remaining);
-        } else {
-          setLockoutSeconds(0);
-          localStorage.removeItem(LOCKOUT_KEY);
-          localStorage.removeItem(ATTEMPTS_KEY);
-        }
-      } else {
-        setLockoutSeconds(0);
+      const until = parseInt(localStorage.getItem(LOCKOUT_KEY) || '0', 10);
+      const remaining = Math.max(0, Math.ceil((until - Date.now()) / 1000));
+      setLockoutSeconds(remaining);
+      if (remaining === 0 && until > 0) {
+        localStorage.removeItem(LOCKOUT_KEY);
+        localStorage.removeItem(ATTEMPTS_KEY);
       }
     };
 
@@ -165,162 +174,178 @@ export const AdminModal: React.FC<AdminModalProps> = ({
     return () => clearInterval(interval);
   }, []);
 
-  // Sync settings when props change
-  useEffect(() => {
-    setBannerText(settings.banner);
-    setMenPhone(settings.menPhone);
-    setWomenPhone(settings.womenPhone);
-  }, [settings]);
-
-  // Keep newStore tab synchronized with active tab
-  useEffect(() => {
-    if (activeTab === 'men' || activeTab === 'women') {
-      setNewStore(activeTab);
-    }
-  }, [activeTab]);
-
   if (!isOpen) return null;
 
+  // Handle Passcode Login
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     if (lockoutSeconds > 0) return;
+    if (!passcode.trim()) {
+      setAuthError('يرجى إدخال الرمز السري');
+      return;
+    }
 
-    setAuthError('');
     setAuthLoading(true);
+    setAuthError('');
 
     try {
-      await adminLogin(passcode);
-      setPasscode('');
+      await adminLogin(passcode.trim());
+      // reset attempts on success
       localStorage.removeItem(ATTEMPTS_KEY);
       localStorage.removeItem(LOCKOUT_KEY);
-      setLockoutSeconds(0);
+      setPasscode('');
     } catch {
-      const currentAttempts = parseInt(localStorage.getItem(ATTEMPTS_KEY) || '0', 10) + 1;
-      localStorage.setItem(ATTEMPTS_KEY, currentAttempts.toString());
+      // Failed attempt
+      const attempts = parseInt(localStorage.getItem(ATTEMPTS_KEY) || '0', 10) + 1;
+      localStorage.setItem(ATTEMPTS_KEY, attempts.toString());
 
-      if (currentAttempts >= 5) {
+      if (attempts >= 5) {
         const lockoutUntil = Date.now() + 60 * 1000;
         localStorage.setItem(LOCKOUT_KEY, lockoutUntil.toString());
         setLockoutSeconds(60);
+        setAuthError('تم حظر المحاولات لمدة 60 ثانية بسبب تكرار الخطأ.');
+      } else {
+        const remainingAttempts = 5 - attempts;
+        setAuthError(`الرمز غلط (تبقى ${remainingAttempts} محاولات)`);
       }
-      setAuthError('الرمز غلط');
     } finally {
       setAuthLoading(false);
     }
   };
 
   const handleLogout = async () => {
-    await adminLogout();
-    setPasscode('');
-    setAuthError('');
-    setEditingProduct(null);
-  };
-
-  const handleAddImageSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files[0]) {
-      const file = e.target.files[0];
-      setNewImageFile(file);
-      const url = URL.createObjectURL(file);
-      setImagePreview(url);
+    try {
+      await adminLogout();
+    } catch (err) {
+      console.error(err);
     }
   };
 
+  // Add Product Photo Handler
+  const handleAddImageChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setIsCompressingNew(true);
+    setAddError('');
+    try {
+      const base64 = await compressImageToBase64(file);
+      setNewImageBase64(base64);
+    } catch (err: any) {
+      setAddError(err.message || 'تعذر ضغط الصورة');
+    } finally {
+      setIsCompressingNew(false);
+    }
+  };
+
+  // Save new product
   const handleAddProduct = async (e: React.FormEvent) => {
     e.preventDefault();
     setAddError('');
     setAddSuccess(false);
 
-    // Only Arabic name is required
-    if (!newNameAr.trim()) {
-      setAddError('يرجى إدخال اسم المنتج بالعربية');
+    if (!user && isFirebaseLiveMode()) {
+      setAddError('سجّل الدخول من جديد');
       return;
     }
 
-    if (isFirebaseLiveMode() && !getCurrentAuthUser()) {
-      setAddError('سجّل الدخول من جديد');
+    if (!newNameAr.trim()) {
+      setAddError('اسم المنتج بالعربية مطلوب');
       return;
     }
 
     setIsAdding(true);
     try {
-      let base64Url = '';
-      if (newImageFile) {
-        // Compress client-side to canvas max 500px, quality 0.7, <150KB
-        base64Url = await compressImageToBase64(newImageFile);
-      }
+      const cleanPrice = newPrice.trim().replace('$', '');
+      // If English name is empty, fall back to Arabic name
+      const finalEnName = newNameEn.trim() || newNameAr.trim();
 
       await addProduct({
-        store: newStore,
-        nameAr: newNameAr,
-        nameEn: newNameEn.trim() || newNameAr.trim(),
-        price: newPrice,
-        imageUrl: base64Url,
+        store: activeTab === 'settings' ? 'men' : activeTab,
+        nameAr: newNameAr.trim(),
+        nameEn: finalEnName,
+        category: newCategory.trim() || undefined,
+        price: cleanPrice || undefined,
+        imageUrl: newImageBase64 || undefined,
+        soldOut: false,
+        hidden: false,
       });
 
+      setAddSuccess(true);
       // Reset form
       setNewNameAr('');
       setNewNameEn('');
+      setNewCategory('');
       setNewPrice('');
-      setNewImageFile(null);
-      setImagePreview('');
+      setNewImageBase64('');
       if (addFileInputRef.current) addFileInputRef.current.value = '';
 
-      setAddSuccess(true);
-      setTimeout(() => setAddSuccess(false), 2000);
+      setTimeout(() => {
+        setAddSuccess(false);
+        setIsAddOpen(false);
+      }, 1500);
     } catch (err: any) {
-      console.error('Error adding product:', err);
       setAddError(formatErrorMessage(err));
     } finally {
       setIsAdding(false);
     }
   };
 
-  // Open Edit Product Modal for tapped row
-  const openEditModal = (prod: Product) => {
-    setEditingProduct(prod);
-    setEditNameAr(prod.nameAr);
-    setEditNameEn(prod.nameEn || prod.nameAr);
-    setEditPrice(prod.price || '');
-    setEditImageUrl(prod.imageUrl || '');
+  // Open Edit Product Drawer
+  const openEditModal = (p: Product) => {
+    setEditingProduct(p);
+    setEditNameAr(p.nameAr || '');
+    setEditNameEn(p.nameEn || '');
+    setEditCategory(p.category || '');
+    setEditPrice(p.price || '');
+    setEditImageBase64(p.imageUrl || '');
     setEditError('');
     setEditSuccess(false);
   };
 
-  const handleEditImageSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files[0]) {
-      try {
-        const file = e.target.files[0];
-        const compressedBase64 = await compressImageToBase64(file);
-        setEditImageUrl(compressedBase64);
-      } catch (err: any) {
-        setEditError('تعذر معالجة الصورة: ' + err.message);
-      }
+  // Edit Image handler
+  const handleEditImageChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setIsCompressingEdit(true);
+    setEditError('');
+    try {
+      const base64 = await compressImageToBase64(file);
+      setEditImageBase64(base64);
+    } catch (err: any) {
+      setEditError(err.message || 'تعذر معالجة الصورة');
+    } finally {
+      setIsCompressingEdit(false);
     }
   };
 
+  // Save edited product
   const handleSaveEdit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingProduct) return;
     setEditError('');
     setEditSuccess(false);
 
-    if (!editNameAr.trim()) {
-      setEditError('يرجى إدخال اسم المنتج بالعربية');
-      return;
-    }
-
-    if (isFirebaseLiveMode() && !getCurrentAuthUser()) {
+    if (!user && isFirebaseLiveMode()) {
       setEditError('سجّل الدخول من جديد');
       return;
     }
 
-    setIsUpdating(true);
+    if (!editNameAr.trim()) {
+      setEditError('اسم المنتج بالعربية مطلوب');
+      return;
+    }
+
+    setIsSavingEdit(true);
     try {
+      const cleanPrice = editPrice.trim().replace('$', '');
       await updateProduct(editingProduct.id, {
         nameAr: editNameAr.trim(),
         nameEn: editNameEn.trim() || editNameAr.trim(),
-        price: editPrice.trim(),
-        imageUrl: editImageUrl,
+        category: editCategory.trim() || undefined,
+        price: cleanPrice || undefined,
+        imageUrl: editImageBase64 || undefined,
       });
 
       setEditSuccess(true);
@@ -329,36 +354,88 @@ export const AdminModal: React.FC<AdminModalProps> = ({
         setEditingProduct(null);
       }, 1500);
     } catch (err: any) {
-      console.error('Error updating product:', err);
       setEditError(formatErrorMessage(err));
     } finally {
-      setIsUpdating(false);
+      setIsSavingEdit(false);
     }
   };
 
-  const handleDeleteProduct = async (id: string) => {
-    if (window.confirm('حذف هذا المنتج؟')) {
-      if (isFirebaseLiveMode() && !getCurrentAuthUser()) {
-        alert('سجّل الدخول من جديد');
-        return;
-      }
-      try {
-        await deleteProduct(id);
-        if (editingProduct?.id === id) {
-          setEditingProduct(null);
-        }
-      } catch (err: any) {
-        alert(formatErrorMessage(err));
-      }
+  // Delete product
+  const handleDeleteProduct = async () => {
+    if (!editingProduct) return;
+    const confirmed = window.confirm(`هل أنت متأكد من حذف "${editingProduct.nameAr}"؟`);
+    if (!confirmed) return;
+
+    setIsDeleting(true);
+    setEditError('');
+    try {
+      await deleteProduct(editingProduct.id);
+      setEditingProduct(null);
+    } catch (err: any) {
+      setEditError(formatErrorMessage(err));
+    } finally {
+      setIsDeleting(false);
     }
   };
 
+  // Quick SoldOut Toggle
+  const handleToggleSoldOut = async (p: Product) => {
+    setTogglingId(p.id);
+    try {
+      await updateProduct(p.id, { soldOut: !p.soldOut });
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setTogglingId(null);
+    }
+  };
+
+  // Quick Hidden Toggle
+  const handleToggleHidden = async (p: Product) => {
+    setTogglingId(p.id);
+    try {
+      await updateProduct(p.id, { hidden: !p.hidden });
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setTogglingId(null);
+    }
+  };
+
+  // Quick Reorder
+  const handleReorder = async (productId: string, direction: 'up' | 'down') => {
+    if (activeTab === 'settings') return;
+    try {
+      await reorderProducts(productId, direction, activeTab);
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  // Hero background image upload in settings
+  const handleHeroImageChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setIsCompressingHero(true);
+    setSettingsError('');
+    try {
+      const base64 = await compressImageToBase64(file);
+      setHeroImageBase64(base64);
+    } catch (err: any) {
+      setSettingsError(err.message || 'تعذر معالجة صورة الواجهة');
+    } finally {
+      setIsCompressingHero(false);
+    }
+  };
+
+  // Save Settings
   const handleSaveSettings = async (e: React.FormEvent) => {
     e.preventDefault();
     setSettingsError('');
     setSettingsSuccess(false);
 
-    if (isFirebaseLiveMode() && !getCurrentAuthUser()) {
+    if (!user && isFirebaseLiveMode()) {
       setSettingsError('سجّل الدخول من جديد');
       return;
     }
@@ -367,803 +444,839 @@ export const AdminModal: React.FC<AdminModalProps> = ({
     try {
       await updateSettings({
         banner: bannerText.trim(),
-        menPhone: menPhone.trim(),
-        womenPhone: womenPhone.trim(),
+        menPhone: menPhoneVal.trim(),
+        womenPhone: womenPhoneVal.trim(),
+        heroImage: heroImageBase64 || '',
       });
       setSettingsSuccess(true);
-      setTimeout(() => setSettingsSuccess(false), 2000);
+      setTimeout(() => setSettingsSuccess(false), 2500);
     } catch (err: any) {
-      console.error('Error saving settings:', err);
       setSettingsError(formatErrorMessage(err));
     } finally {
       setIsSavingSettings(false);
     }
   };
 
-  const handleChangePassword = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setPasswordStatus('');
+  // Products filtered for active tab
+  const currentStoreProducts =
+    activeTab !== 'settings'
+      ? products
+          .filter((p) => p.store === activeTab)
+          .sort((a, b) => (a.order ?? 9999) - (b.order ?? 9999))
+      : [];
 
-    if (!newAdminPassword || newAdminPassword.length < 6) {
-      setPasswordStatus('الرمز السري الجديد يجب أن لا يقل عن 6 أحرف');
-      return;
-    }
-    try {
-      await adminChangePassword(newAdminPassword);
-      setNewAdminPassword('');
-      setPasswordStatus('تم تحديث الرمز بنجاح ✓');
-      setTimeout(() => setPasswordStatus(''), 3000);
-    } catch (err: any) {
-      setPasswordStatus(formatErrorMessage(err));
-    }
-  };
-
-  const filteredProducts = products.filter((p) => p.store === activeTab);
+  const menCount = products.filter((p) => p.store === 'men').length;
+  const womenCount = products.filter((p) => p.store === 'women').length;
 
   return (
     <div
+      role="dialog"
+      aria-modal="true"
+      aria-label="Admin Panel"
+      className="admin-overlay fixed inset-0 z-50 bg-[var(--dark)]/95 backdrop-blur-md flex flex-col w-full max-w-full overflow-y-auto overflow-x-hidden safe-paddings select-none"
       dir="rtl"
-      className="admin-overlay-container z-50 flex flex-col bg-[var(--bg)] text-[var(--ink)] font-body"
-      style={{
-        position: 'fixed',
-        inset: 0,
-        width: '100%',
-        maxWidth: '100vw',
-        overflowY: 'auto',
-        overflowX: 'hidden',
-        overscrollBehaviorX: 'none',
-        touchAction: 'pan-y',
-        WebkitOverflowScrolling: 'touch',
-      }}
     >
-      {/* Top Header - flex-wrap and gap: 8px to prevent overflow on iPhone Safari */}
-      <header className="flex flex-wrap items-center justify-between px-3 py-2.5 bg-[var(--card)] border-b border-[var(--line)] safe-top gap-2 w-full max-w-full shrink-0 box-border">
+      {/* 1. Header Bar: wrapped & touch-friendly for 375px */}
+      <header className="sticky top-0 z-20 bg-[var(--dark)] border-b border-[var(--line)]/30 px-3.5 py-3 flex items-center justify-between gap-2 max-w-full">
         <div className="flex items-center gap-2 min-w-0">
-          <div className="w-8 h-8 rounded-full bg-[var(--red)]/10 text-[var(--red)] flex items-center justify-center font-bold shrink-0">
-            H
+          <div className="w-8 h-8 rounded-lg bg-[var(--red)]/20 text-[var(--red)] flex items-center justify-center shrink-0">
+            <Lock className="w-4 h-4" />
           </div>
           <div className="min-w-0">
-            <h2 className="font-bold text-sm sm:text-base leading-tight truncate">لوحة تحكم حمدر</h2>
-            <p className="text-[11px] text-[var(--muted)] truncate">إدارة المتجر</p>
+            <h1 className="text-sm sm:text-base font-bold text-white tracking-wide truncate">
+              لوحة التحكم
+            </h1>
+            <p className="text-[11px] text-[var(--gold)] truncate flex items-center gap-1">
+              <Database className="w-2.5 h-2.5" />
+              <span>{isFirebaseLiveMode() ? 'قاعدة بيانات سحابية متصلة' : 'وضع محلي'}</span>
+            </p>
           </div>
         </div>
 
-        {/* Header Action Buttons */}
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex items-center gap-2 shrink-0">
           {user && (
             <button
               onClick={handleLogout}
-              className="touch-btn px-2.5 py-1.5 rounded-lg border border-red-500/20 text-red-600 hover:bg-red-500/10 text-xs font-bold transition-colors flex items-center gap-1 cursor-pointer shrink-0"
-              aria-label="تسجيل الخروج"
+              className="touch-btn px-2.5 py-1.5 rounded-lg border border-red-500/30 text-red-400 hover:bg-red-500/10 text-xs font-semibold flex items-center gap-1 transition-colors cursor-pointer"
+              title="تسجيل الخروج"
             >
               <LogOut className="w-3.5 h-3.5" />
-              <span>تسجيل الخروج</span>
+              <span className="hidden xs:inline">تسجيل الخروج</span>
             </button>
           )}
 
           <button
             onClick={onClose}
-            className="touch-btn px-3 py-1.5 rounded-lg border border-[var(--line)] bg-[var(--bg)] hover:bg-[var(--card)] text-xs sm:text-sm font-semibold transition-colors flex items-center gap-1 cursor-pointer shrink-0"
-            aria-label="إغلاق لوحة التحكم"
+            className="touch-btn w-9 h-9 rounded-lg bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition-colors cursor-pointer"
+            aria-label="إغلاق"
           >
-            <X className="w-4 h-4" />
-            <span>إغلاق</span>
+            <X className="w-5 h-5" />
           </button>
         </div>
       </header>
 
-      {/* Main Content Area */}
-      {!user ? (
-        // Single Passcode Login View
-        <div className="flex-1 overflow-y-auto overflow-x-hidden p-4 flex items-center justify-center w-full max-w-full box-border">
-          <div className="w-full max-w-sm bg-[var(--card)] border border-[var(--line)] rounded-2xl p-5 sm:p-7 shadow-sm box-border overflow-hidden">
-            <div className="text-center mb-6">
-              <div className="inline-flex items-center justify-center w-12 h-12 rounded-2xl bg-[var(--red)]/10 text-[var(--red)] mb-2.5">
-                <Lock className="w-6 h-6" />
-              </div>
-              <h3 className="text-lg sm:text-xl font-bold">دخول الإدارة</h3>
-              <p className="text-xs text-[var(--muted)] mt-1">
-                أدخل الرمز السري للمتابعة
-              </p>
+      {/* 2. Content Body */}
+      <main className="flex-1 max-w-3xl w-full mx-auto p-3.5 sm:p-6 pb-24">
+        {/* If NOT logged in: Single Passcode Gate */}
+        {!user ? (
+          <div className="max-w-sm mx-auto my-12 bg-[var(--card)] border border-[var(--line)] rounded-2xl p-6 sm:p-8 text-center shadow-2xl">
+            <div className="w-16 h-16 rounded-full bg-[var(--red)]/10 text-[var(--red)] mx-auto flex items-center justify-center mb-5">
+              <Lock className="w-8 h-8" />
             </div>
 
-            {authError && (
-              <div
-                role="alert"
-                className="mb-4 p-3 rounded-xl bg-red-500/15 border border-red-500/30 text-red-600 text-center font-bold text-sm"
-              >
-                {authError}
-              </div>
-            )}
+            <h2 className="text-xl font-bold mb-2 text-[var(--ink)]">تسجيل الدخول للإدارة</h2>
+            <p className="text-xs text-[var(--muted)] mb-6">
+              أدخل الرمز السري الخاص بمتجر حمدر للمتابعة
+            </p>
 
-            {lockoutSeconds > 0 && (
-              <div
-                role="alert"
-                className="mb-4 p-3.5 rounded-xl bg-amber-500/15 border border-amber-500/30 text-amber-600 text-center text-xs font-bold flex flex-col items-center gap-1"
-              >
-                <AlertTriangle className="w-5 h-5 shrink-0" />
-                <span>تم قفل النموذج مؤقتاً بسبب 5 محاولات خاطئة.</span>
-                <span>يرجى الانتظار {lockoutSeconds} ثانية.</span>
-              </div>
-            )}
-
-            <form onSubmit={handleLogin} className="space-y-4 w-full box-border">
-              <div className="w-full box-border">
-                <label className="block text-xs font-bold mb-1.5 text-[var(--ink)]">
+            <form onSubmit={handleLogin} className="space-y-4">
+              <div className="relative text-right">
+                <label className="block text-xs font-bold text-[var(--ink)] mb-1.5">
                   الرمز السري
                 </label>
-                <div className="relative w-full box-border">
+                <div className="relative">
                   <input
                     type={showPassword ? 'text' : 'password'}
-                    required
-                    disabled={lockoutSeconds > 0}
                     value={passcode}
-                    onChange={(e) => setPasscode(e.target.value)}
-                    className="w-full box-border px-3.5 py-2.5 rounded-xl border border-[var(--line)] bg-[var(--bg)] text-[var(--ink)] focus:outline-none focus:border-[var(--red)] pl-10 disabled:opacity-50"
+                    disabled={lockoutSeconds > 0 || authLoading}
+                    onChange={(e) => {
+                      setPasscode(e.target.value);
+                      if (authError) setAuthError('');
+                    }}
                     placeholder="••••••••"
-                    style={{ fontSize: '16px' }}
-                    autoFocus
+                    dir="ltr"
+                    className="w-full h-12 px-4 pe-11 rounded-xl border border-[var(--line)] bg-[var(--bg)] text-[var(--ink)] font-mono text-base focus:border-[var(--red)] focus:ring-1 focus:ring-[var(--red)] focus:outline-none transition-all disabled:opacity-50"
                   />
                   <button
                     type="button"
-                    disabled={lockoutSeconds > 0}
                     onClick={() => setShowPassword(!showPassword)}
-                    className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--muted)] hover:text-[var(--ink)] p-1 disabled:opacity-50"
+                    className="absolute inset-y-0 end-0 px-3 flex items-center text-[var(--muted)] hover:text-[var(--ink)]"
+                    tabIndex={-1}
                   >
                     {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                   </button>
                 </div>
               </div>
 
+              {authError && (
+                <div className="p-2.5 rounded-lg bg-red-500/10 border border-red-500/20 text-red-500 text-xs text-center font-bold animate-in fade-in">
+                  {authError}
+                </div>
+              )}
+
+              {lockoutSeconds > 0 && (
+                <div className="p-2.5 rounded-lg bg-amber-500/10 border border-amber-500/20 text-amber-500 text-xs text-center font-bold">
+                  محظور مؤقتاً: انتظر {lockoutSeconds} ثانية
+                </div>
+              )}
+
               <button
                 type="submit"
-                disabled={authLoading || lockoutSeconds > 0}
-                className="touch-btn w-full mt-2 rounded-xl bg-[var(--red)] hover:bg-[#a51217] text-white font-bold transition-all shadow-sm disabled:opacity-50 cursor-pointer text-sm"
+                disabled={lockoutSeconds > 0 || authLoading}
+                className="touch-btn w-full h-12 rounded-xl bg-[var(--red)] hover:bg-[#a31117] text-white font-bold text-base transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50 shadow-md"
               >
                 {authLoading ? (
-                  <span className="flex items-center gap-2">
+                  <>
                     <Loader2 className="w-4 h-4 animate-spin" />
-                    جاري التحقق…
-                  </span>
-                ) : lockoutSeconds > 0 ? (
-                  `يرجى الانتظار (${lockoutSeconds} ثانية)`
+                    <span>جاري التحقق...</span>
+                  </>
                 ) : (
-                  'دخول'
+                  <span>دخول</span>
                 )}
               </button>
             </form>
           </div>
-        </div>
-      ) : (
-        // Authenticated Admin Dashboard
-        <div className="flex-1 flex flex-col overflow-hidden w-full max-w-full box-border">
-          {/* Navigation Tabs (3 equal tabs, flex: 1, min-width: 0, fits 375px screens) */}
-          <div className="flex w-full max-w-full border-b border-[var(--line)] bg-[var(--card)] p-1 gap-1 shrink-0 box-border">
-            <button
-              onClick={() => setActiveTab('men')}
-              className={`touch-btn flex-1 min-w-0 py-2 px-1 text-center font-bold text-xs rounded-lg transition-all cursor-pointer truncate box-border ${
-                activeTab === 'men'
-                  ? 'bg-[var(--red)] text-white shadow-xs'
-                  : 'text-[var(--muted)] hover:text-[var(--ink)] bg-transparent'
-              }`}
-            >
-              <span className="truncate">رجالي ({products.filter((p) => p.store === 'men').length})</span>
-            </button>
+        ) : (
+          /* LOGGED IN VIEW */
+          <div className="space-y-5">
+            {/* 3 Equal Tabs: Men / Women / Settings */}
+            <div className="grid grid-cols-3 gap-1.5 p-1 rounded-xl bg-black/40 border border-white/10 w-full text-center">
+              <button
+                onClick={() => {
+                  setActiveTab('men');
+                  setIsAddOpen(false);
+                }}
+                className={`touch-btn py-2.5 px-1 rounded-lg text-xs sm:text-sm font-bold transition-all truncate flex items-center justify-center gap-1 ${
+                  activeTab === 'men'
+                    ? 'bg-[var(--red)] text-white shadow-sm'
+                    : 'text-neutral-400 hover:text-white'
+                }`}
+              >
+                <span>رجالي</span>
+                <span className="text-[10px] opacity-75">({menCount})</span>
+              </button>
 
-            <button
-              onClick={() => setActiveTab('women')}
-              className={`touch-btn flex-1 min-w-0 py-2 px-1 text-center font-bold text-xs rounded-lg transition-all cursor-pointer truncate box-border ${
-                activeTab === 'women'
-                  ? 'bg-[var(--gold)] text-black shadow-xs'
-                  : 'text-[var(--muted)] hover:text-[var(--ink)] bg-transparent'
-              }`}
-            >
-              <span className="truncate">نسائي ({products.filter((p) => p.store === 'women').length})</span>
-            </button>
+              <button
+                onClick={() => {
+                  setActiveTab('women');
+                  setIsAddOpen(false);
+                }}
+                className={`touch-btn py-2.5 px-1 rounded-lg text-xs sm:text-sm font-bold transition-all truncate flex items-center justify-center gap-1 ${
+                  activeTab === 'women'
+                    ? 'bg-[var(--red)] text-white shadow-sm'
+                    : 'text-neutral-400 hover:text-white'
+                }`}
+              >
+                <span>نسائي</span>
+                <span className="text-[10px] opacity-75">({womenCount})</span>
+              </button>
 
-            <button
-              onClick={() => setActiveTab('settings')}
-              className={`touch-btn flex-1 min-w-0 py-2 px-1 text-center font-bold text-xs rounded-lg transition-all cursor-pointer truncate box-border ${
-                activeTab === 'settings'
-                  ? 'bg-[var(--ink)] text-[var(--bg)] shadow-xs'
-                  : 'text-[var(--muted)] hover:text-[var(--ink)] bg-transparent'
-              }`}
-            >
-              <span className="truncate">إعدادات</span>
-            </button>
-          </div>
+              <button
+                onClick={() => {
+                  setActiveTab('settings');
+                  setIsAddOpen(false);
+                }}
+                className={`touch-btn py-2.5 px-1 rounded-lg text-xs sm:text-sm font-bold transition-all truncate ${
+                  activeTab === 'settings'
+                    ? 'bg-[var(--red)] text-white shadow-sm'
+                    : 'text-neutral-400 hover:text-white'
+                }`}
+              >
+                <span>إعدادات</span>
+              </button>
+            </div>
 
-          {/* Scrollable Content */}
-          <div className="flex-1 overflow-y-auto overflow-x-hidden p-3 sm:p-5 pb-24 w-full max-w-full box-border">
-            {activeTab === 'men' || activeTab === 'women' ? (
-              <div className="max-w-4xl mx-auto space-y-6 w-full max-w-full box-border">
-                {/* Add Product Form Card */}
-                <section className="bg-[var(--card)] border border-[var(--line)] rounded-2xl p-4 sm:p-5 shadow-sm w-full max-w-full box-border overflow-hidden">
-                  <h3 className="font-bold text-sm sm:text-base mb-1 flex items-center gap-2">
-                    <span className="w-2.5 h-2.5 rounded-full bg-[var(--red)] shrink-0"></span>
-                    <span>إضافة منتج جديد ({activeTab === 'men' ? 'حمدر رجالي' : 'حمدر نسائي'})</span>
-                  </h3>
-                  <p className="text-xs text-[var(--muted)] mb-4">
-                    أدخل بيانات المنتج (الصورة والاسم الإنجليزي والسعر اختيارية).
-                  </p>
+            {/* TAB CONTENT: PRODUCTS (MEN / WOMEN) */}
+            {activeTab !== 'settings' && (
+              <div className="space-y-4">
+                {/* Add Product Toggle Button */}
+                <button
+                  onClick={() => setIsAddOpen(!isAddOpen)}
+                  className={`touch-btn w-full py-3.5 px-4 rounded-xl font-bold text-sm flex items-center justify-center gap-2 border transition-all cursor-pointer ${
+                    isAddOpen
+                      ? 'bg-neutral-800 text-white border-white/20'
+                      : 'bg-emerald-600 hover:bg-emerald-700 text-white border-emerald-500 shadow-md'
+                  }`}
+                >
+                  {isAddOpen ? (
+                    <>
+                      <X className="w-4 h-4" />
+                      <span>إلغاء الإضافة</span>
+                    </>
+                  ) : (
+                    <>
+                      <Plus className="w-4 h-4" />
+                      <span>إضافة منتج جديد ({activeTab === 'men' ? 'رجالي' : 'نسائي'})</span>
+                    </>
+                  )}
+                </button>
 
-                  <form onSubmit={handleAddProduct} className="space-y-4 w-full max-w-full box-border">
-                    {/* Photo Picker */}
-                    <div className="w-full box-border">
-                      <label className="block text-xs font-bold mb-1.5 text-[var(--ink)]">
-                        صورة المنتج (اختياري)
-                      </label>
-                      <div className="flex flex-col sm:flex-row items-center gap-3 w-full max-w-full overflow-hidden box-border">
-                        <div
-                          onClick={() => addFileInputRef.current?.click()}
-                          className="w-28 h-28 max-w-full rounded-xl border-2 border-dashed border-[var(--line)] hover:border-[var(--red)] transition-colors flex flex-col items-center justify-center cursor-pointer bg-[var(--bg)] relative overflow-hidden group shrink-0 box-border"
-                        >
-                          {imagePreview ? (
-                            <img
-                              src={imagePreview}
-                              alt="Preview"
-                              className="w-full h-full object-cover"
+                {/* ADD PRODUCT BOTTOM SHEET / DRAWER */}
+                {isAddOpen && (
+                  <div className="bg-[var(--card)] border border-[var(--line)] rounded-2xl p-4 sm:p-5 shadow-xl animate-in fade-in slide-in-from-top-3 duration-200">
+                    <h3 className="text-base font-bold text-[var(--ink)] mb-4 flex items-center gap-2">
+                      <ShoppingBag className="w-4 h-4 text-[var(--red)]" />
+                      <span>إضافة منتج جديد لـ {activeTab === 'men' ? 'حمدر رجالي' : 'حمدر نسائي'}</span>
+                    </h3>
+
+                    <form onSubmit={handleAddProduct} className="space-y-4">
+                      {/* Photo Picker */}
+                      <div>
+                        <label className="block text-xs font-bold text-[var(--ink)] mb-2">
+                          صورة المنتج (اختياري)
+                        </label>
+                        <div className="flex items-center gap-3">
+                          <div className="w-20 h-20 rounded-xl border-2 border-dashed border-[var(--line)] overflow-hidden bg-[var(--bg)] flex items-center justify-center relative shrink-0">
+                            {isCompressingNew ? (
+                              <Loader2 className="w-6 h-6 animate-spin text-[var(--muted)]" />
+                            ) : newImageBase64 ? (
+                              <img
+                                src={newImageBase64}
+                                alt="Preview"
+                                className="w-full h-full object-cover"
+                              />
+                            ) : (
+                              <ImageIcon className="w-6 h-6 text-[var(--muted)] opacity-50" />
+                            )}
+                          </div>
+
+                          <div className="space-y-1.5 flex-1 min-w-0">
+                            <input
+                              type="file"
+                              ref={addFileInputRef}
+                              accept="image/*"
+                              onChange={handleAddImageChange}
+                              className="hidden"
+                              id="add-product-photo"
                             />
-                          ) : (
-                            <div className="flex flex-col items-center text-center p-2 text-[var(--muted)] group-hover:text-[var(--red)]">
-                              <Upload className="w-5 h-5 mb-1" />
-                              <span className="text-[11px] font-semibold">اختيار صورة</span>
-                              <span className="text-[9px] text-[var(--muted)]">كاميرا / معرض</span>
-                            </div>
-                          )}
-                        </div>
+                            <label
+                              htmlFor="add-product-photo"
+                              className="touch-btn inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-[var(--bg)] border border-[var(--line)] hover:border-[var(--muted)] text-xs font-bold text-[var(--ink)] cursor-pointer"
+                            >
+                              <Upload className="w-3.5 h-3.5" />
+                              <span>اختر صورة من الهاتف</span>
+                            </label>
 
-                        <div className="flex-1 text-xs text-[var(--muted)] space-y-1.5 min-w-0 w-full box-border">
-                          <input
-                            ref={addFileInputRef}
-                            type="file"
-                            accept="image/*"
-                            onChange={handleAddImageSelect}
-                            className="hidden"
-                          />
-                          <button
-                            type="button"
-                            onClick={() => addFileInputRef.current?.click()}
-                            className="touch-btn px-3.5 py-1.5 rounded-xl border border-[var(--line)] bg-[var(--card)] hover:bg-[var(--bg)] font-semibold text-xs text-[var(--ink)] flex items-center gap-2 cursor-pointer max-w-full"
-                          >
-                            <ImageIcon className="w-4 h-4 text-[var(--red)] shrink-0" />
-                            <span className="truncate">{imagePreview ? 'تغيير الصورة المحددة' : 'فتح المعرض أو الكاميرا'}</span>
-                          </button>
-                          <p className="text-[11px] leading-relaxed">
-                            يتم ضغط الصورة في المتصفح إلى أقل من 150KB وتُحفظ فوراً.
-                          </p>
+                            {newImageBase64 && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setNewImageBase64('');
+                                  if (addFileInputRef.current) addFileInputRef.current.value = '';
+                                }}
+                                className="block text-[11px] text-red-500 hover:underline cursor-pointer"
+                              >
+                                حذف الصورة
+                              </button>
+                            )}
+                            <p className="text-[10px] text-[var(--muted)]">
+                              تُضغط الصورة تلقائياً لسرعة فائقة (أقل من 150KB)
+                            </p>
+                          </div>
                         </div>
                       </div>
-                    </div>
 
-                    {/* Inputs - minimum 16px font-size to prevent iOS auto-zoom */}
-                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 w-full max-w-full box-border">
-                      <div className="w-full min-w-0 box-border">
-                        <label className="block text-xs font-bold mb-1 text-[var(--ink)]">
-                          الاسم بالعربية <span className="text-red-500">*</span>
+                      {/* Arabic Name (Required) */}
+                      <div>
+                        <label className="block text-xs font-bold text-[var(--ink)] mb-1">
+                          اسم المنتج بالعربية <span className="text-[var(--red)]">*</span>
                         </label>
                         <input
                           type="text"
                           required
                           value={newNameAr}
-                          onChange={(e) => {
-                            setNewNameAr(e.target.value);
-                            if (addError) setAddError('');
-                          }}
-                          placeholder="مثال: جاكيت صوف دافئ"
-                          style={{ fontSize: '16px' }}
-                          className="w-full box-border px-3 py-2 rounded-xl border border-[var(--line)] bg-[var(--bg)] focus:outline-none focus:border-[var(--red)]"
+                          onChange={(e) => setNewNameAr(e.target.value)}
+                          placeholder="مثال: قميص كتان تركي كحلي"
+                          className="w-full h-11 px-3 rounded-xl border border-[var(--line)] bg-[var(--bg)] text-[var(--ink)] text-base focus:border-[var(--red)] focus:outline-none"
                         />
                       </div>
 
-                      <div className="w-full min-w-0 box-border">
-                        <label className="block text-xs font-bold mb-1 text-[var(--ink)]">
+                      {/* English Name (Optional) */}
+                      <div>
+                        <label className="block text-xs font-bold text-[var(--ink)] mb-1">
                           الاسم بالإنجليزية (اختياري)
                         </label>
                         <input
                           type="text"
-                          dir="ltr"
                           value={newNameEn}
                           onChange={(e) => setNewNameEn(e.target.value)}
-                          placeholder="اختياري - يترك فارغاً للتكرار"
-                          style={{ fontSize: '16px' }}
-                          className="w-full box-border px-3 py-2 rounded-xl border border-[var(--line)] bg-[var(--bg)] focus:outline-none focus:border-[var(--red)] text-left"
-                        />
-                      </div>
-
-                      <div className="w-full min-w-0 box-border">
-                        <label className="block text-xs font-bold mb-1 text-[var(--ink)]">
-                          السعر بالدولار $ (اختياري)
-                        </label>
-                        <input
-                          type="text"
+                          placeholder="مثال: Navy Turkish Linen Shirt"
                           dir="ltr"
-                          value={newPrice}
-                          onChange={(e) => setNewPrice(e.target.value)}
-                          placeholder="مثال: 25 أو $25"
-                          style={{ fontSize: '16px' }}
-                          className="w-full box-border px-3 py-2 rounded-xl border border-[var(--line)] bg-[var(--bg)] focus:outline-none focus:border-[var(--red)] text-left"
+                          className="w-full h-11 px-3 rounded-xl border border-[var(--line)] bg-[var(--bg)] text-[var(--ink)] text-base focus:border-[var(--red)] focus:outline-none"
                         />
+                        <p className="text-[10px] text-[var(--muted)] mt-1">
+                          إذا تركته فارغاً، سيتم استخدام الاسم العربي تلقائياً.
+                        </p>
                       </div>
-                    </div>
 
-                    <div className="pt-2 w-full box-border">
-                      <button
-                        type="submit"
-                        disabled={isAdding}
-                        className="touch-btn px-6 py-2.5 rounded-xl bg-[var(--red)] hover:bg-[#a51217] text-white font-bold text-sm transition-all shadow-sm disabled:opacity-50 flex items-center gap-2 cursor-pointer max-w-full"
-                      >
-                        {isAdding ? (
-                          <>
-                            <Loader2 className="w-4 h-4 animate-spin shrink-0" />
-                            <span>جاري النشر…</span>
-                          </>
-                        ) : (
-                          <>
-                            <Save className="w-4 h-4 shrink-0" />
-                            <span>إضافة المنتج للقائمة</span>
-                          </>
-                        )}
-                      </button>
+                      {/* Category & Price Grid */}
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div>
+                          <label className="block text-xs font-bold text-[var(--ink)] mb-1">
+                            التصنيف (اختياري)
+                          </label>
+                          <input
+                            type="text"
+                            value={newCategory}
+                            onChange={(e) => setNewCategory(e.target.value)}
+                            placeholder={activeTab === 'men' ? 'مثال: قمصان، بدلات' : 'مثال: فساتين، أطقم'}
+                            className="w-full h-11 px-3 rounded-xl border border-[var(--line)] bg-[var(--bg)] text-[var(--ink)] text-base focus:border-[var(--red)] focus:outline-none"
+                          />
+                        </div>
 
-                      {/* Success state: show "تم الحفظ ✓" for 2 seconds */}
+                        <div>
+                          <label className="block text-xs font-bold text-[var(--ink)] mb-1">
+                            السعر بالدولار (اختياري)
+                          </label>
+                          <div className="relative">
+                            <input
+                              type="text"
+                              value={newPrice}
+                              onChange={(e) => setNewPrice(e.target.value)}
+                              placeholder="25"
+                              dir="ltr"
+                              className="w-full h-11 px-3 pe-8 rounded-xl border border-[var(--line)] bg-[var(--bg)] text-[var(--ink)] text-base focus:border-[var(--red)] focus:outline-none font-bold"
+                            />
+                            <span className="absolute inset-y-0 end-3 flex items-center text-sm font-bold text-[var(--gold)]">
+                              $
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Feedback messages */}
+                      {addError && (
+                        <div className="p-3 rounded-xl bg-red-500/10 border border-red-500/20 text-red-500 text-xs font-bold">
+                          {addError}
+                        </div>
+                      )}
+
                       {addSuccess && (
-                        <div className="mt-2.5 inline-flex items-center gap-1.5 text-xs text-emerald-600 font-bold bg-emerald-500/10 px-3 py-1.5 rounded-lg">
-                          <CheckCircle2 className="w-4 h-4 shrink-0" />
+                        <div className="p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-500 text-xs font-bold flex items-center gap-1.5">
+                          <CheckCircle2 className="w-4 h-4" />
                           <span>تم الحفظ ✓</span>
                         </div>
                       )}
 
-                      {/* Real error message displayed in Arabic under button */}
-                      {addError && (
-                        <div
-                          role="alert"
-                          className="mt-2.5 p-2.5 rounded-xl bg-red-500/15 border border-red-500/30 text-red-600 text-xs font-bold flex items-center gap-2"
-                        >
-                          <AlertTriangle className="w-4 h-4 shrink-0" />
-                          <span>{addError}</span>
-                        </div>
-                      )}
-                    </div>
-                  </form>
-                </section>
-
-                {/* Product List Section (Tappable rows to edit / delete) */}
-                <section className="space-y-3 w-full max-w-full box-border">
-                  <div className="flex items-center justify-between px-1">
-                    <h3 className="font-bold text-sm sm:text-base text-[var(--ink)]">
-                      قائمة المنتجات الحالية ({filteredProducts.length})
-                    </h3>
-                    <span className="text-[11px] text-[var(--muted)]">
-                      اضغط على أي منتج لتعديله
-                    </span>
+                      <button
+                        type="submit"
+                        disabled={isAdding || isCompressingNew}
+                        className="touch-btn w-full h-12 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-base transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50 shadow-md"
+                      >
+                        {isAdding ? (
+                          <>
+                            <Loader2 className="w-4 h-4 animate-spin" />
+                            <span>جاري النشر...</span>
+                          </>
+                        ) : (
+                          <span>إضافة المنتج الآن</span>
+                        )}
+                      </button>
+                    </form>
                   </div>
+                )}
 
-                  {filteredProducts.length === 0 ? (
-                    <div className="text-center py-10 bg-[var(--card)] border border-[var(--line)] rounded-2xl text-[var(--muted)] text-xs sm:text-sm box-border">
-                      لا توجد منتجات في هذا القسم حالياً. استخدم النموذج أعلاه للإضافة.
+                {/* PRODUCT LIST WITH QUICK TOGGLES */}
+                <div className="space-y-2.5">
+                  <h3 className="text-xs font-bold text-neutral-400 px-1">
+                    قائمة المنتجات ({currentStoreProducts.length})
+                  </h3>
+
+                  {currentStoreProducts.length === 0 ? (
+                    <div className="p-8 text-center bg-white/5 rounded-2xl border border-white/10 text-neutral-400 text-xs">
+                      لا توجد منتجات مسجلة في هذا القسم بعد. اضغط على "إضافة منتج جديد" بالأعلى.
                     </div>
                   ) : (
-                    <div className="space-y-2.5 w-full max-w-full box-border">
-                      {filteredProducts.map((prod) => (
+                    currentStoreProducts.map((p, index) => {
+                      const isToggling = togglingId === p.id;
+
+                      return (
                         <div
-                          key={prod.id}
-                          onClick={() => openEditModal(prod)}
-                          className="bg-[var(--card)] border border-[var(--line)] rounded-xl p-3 flex items-center justify-between gap-2.5 shadow-xs hover:border-[var(--red)] transition-all cursor-pointer w-full max-w-full box-border overflow-hidden"
+                          key={p.id}
+                          className={`flex items-center gap-3 p-2.5 sm:p-3 rounded-xl border transition-all ${
+                            p.hidden
+                              ? 'bg-neutral-900/40 border-neutral-800 opacity-60'
+                              : 'bg-[var(--card)] border-[var(--line)] shadow-2xs'
+                          }`}
                         >
+                          {/* Reorder Buttons (↑ / ↓) */}
+                          <div className="flex flex-col gap-1 shrink-0">
+                            <button
+                              type="button"
+                              disabled={index === 0}
+                              onClick={() => handleReorder(p.id, 'up')}
+                              className="w-6 h-6 rounded bg-black/10 hover:bg-black/20 text-neutral-400 hover:text-white flex items-center justify-center disabled:opacity-20 cursor-pointer"
+                              title="تحريك لأعلى"
+                            >
+                              <ArrowUp className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                              type="button"
+                              disabled={index === currentStoreProducts.length - 1}
+                              onClick={() => handleReorder(p.id, 'down')}
+                              className="w-6 h-6 rounded bg-black/10 hover:bg-black/20 text-neutral-400 hover:text-white flex items-center justify-center disabled:opacity-20 cursor-pointer"
+                              title="تحريك لأسفل"
+                            >
+                              <ArrowDown className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+
                           {/* Thumbnail */}
-                          <div className="w-14 h-14 rounded-lg overflow-hidden shrink-0 border border-[var(--line)] bg-[var(--bg)] relative box-border">
-                            {prod.imageUrl ? (
+                          <div className="w-12 h-14 rounded-lg overflow-hidden bg-[var(--bg)] border border-[var(--line)] shrink-0 relative">
+                            {p.imageUrl ? (
                               <img
-                                src={prod.imageUrl}
-                                alt={prod.nameAr}
+                                src={p.imageUrl}
+                                alt={p.nameAr}
                                 className="w-full h-full object-cover"
                               />
                             ) : (
-                              <div className="w-full h-full diagonal-placeholder flex items-center justify-center text-[10px] text-[var(--muted)] font-mono">
-                                بدون صورة
+                              <div className="w-full h-full diagonal-placeholder flex items-center justify-center text-[9px] text-[var(--muted)]">
+                                بلا صورة
+                              </div>
+                            )}
+                            {p.soldOut && (
+                              <div className="absolute inset-0 bg-red-600/80 text-white text-[8px] font-bold flex items-center justify-center">
+                                نفد
                               </div>
                             )}
                           </div>
 
-                          {/* Product Info */}
-                          <div className="flex-1 min-w-0 box-border">
-                            <h4 className="font-bold text-sm text-[var(--ink)] truncate">
-                              {prod.nameAr}
+                          {/* Details */}
+                          <div className="flex-1 min-w-0">
+                            <h4 className="text-xs sm:text-sm font-bold text-[var(--ink)] truncate">
+                              {p.nameAr}
                             </h4>
-                            <p className="text-xs text-[var(--muted)] truncate" dir="ltr">
-                              {prod.nameEn || prod.nameAr}
-                            </p>
-                            {prod.price && (
-                              <span className="text-xs font-bold text-[var(--gold)]">
-                                ${prod.price.replace('$', '')}
-                              </span>
-                            )}
+                            <div className="flex items-center gap-2 text-[11px] text-[var(--muted)]">
+                              {p.price && (
+                                <span className="font-bold text-[var(--gold)]" dir="ltr">
+                                  ${p.price}
+                                </span>
+                              )}
+                              {p.category && (
+                                <span className="px-1.5 py-0.5 rounded bg-[var(--bg)] border border-[var(--line)] text-[10px]">
+                                  {p.category}
+                                </span>
+                              )}
+                            </div>
                           </div>
 
-                          {/* Action Cue */}
-                          <div className="flex items-center gap-1.5 shrink-0 text-xs text-[var(--muted)]">
-                            <span className="hidden sm:inline text-[11px]">تعديل</span>
-                            <Edit3 className="w-4 h-4 text-[var(--red)]" />
+                          {/* Quick Actions */}
+                          <div className="flex items-center gap-1.5 shrink-0">
+                            {/* SoldOut Toggle */}
+                            <button
+                              type="button"
+                              disabled={isToggling}
+                              onClick={() => handleToggleSoldOut(p)}
+                              className={`touch-btn px-2 py-1 rounded-lg text-[11px] font-bold border transition-colors cursor-pointer ${
+                                p.soldOut
+                                  ? 'bg-red-500/20 text-red-400 border-red-500/30'
+                                  : 'bg-emerald-500/10 text-emerald-500 border-emerald-500/20 hover:bg-emerald-500/20'
+                              }`}
+                            >
+                              {p.soldOut ? 'نفد' : 'متوفر'}
+                            </button>
+
+                            {/* Hidden Toggle */}
+                            <button
+                              type="button"
+                              disabled={isToggling}
+                              onClick={() => handleToggleHidden(p)}
+                              className={`touch-btn px-2 py-1 rounded-lg text-[11px] font-bold border transition-colors cursor-pointer ${
+                                p.hidden
+                                  ? 'bg-amber-500/20 text-amber-400 border-amber-500/30'
+                                  : 'bg-neutral-500/10 text-neutral-400 border-neutral-500/20 hover:text-white'
+                              }`}
+                            >
+                              {p.hidden ? 'مخفي' : 'ظاهر'}
+                            </button>
+
+                            {/* Edit / Delete */}
+                            <button
+                              type="button"
+                              onClick={() => openEditModal(p)}
+                              className="touch-btn w-8 h-8 rounded-lg bg-[var(--bg)] border border-[var(--line)] hover:border-[var(--muted)] text-[var(--ink)] flex items-center justify-center cursor-pointer"
+                              title="تعديل أو حذف"
+                            >
+                              <Edit3 className="w-3.5 h-3.5" />
+                            </button>
                           </div>
                         </div>
-                      ))}
-                    </div>
+                      );
+                    })
                   )}
-                </section>
-              </div>
-            ) : (
-              // Settings Tab
-              <div className="max-w-2xl mx-auto space-y-6 w-full max-w-full box-border">
-                {/* General Settings Card */}
-                <section className="bg-[var(--card)] border border-[var(--line)] rounded-2xl p-4 sm:p-5 shadow-sm w-full max-w-full box-border overflow-hidden">
-                  <h3 className="font-bold text-base mb-1 flex items-center gap-2">
-                    <Megaphone className="w-4 h-4 text-[var(--red)] shrink-0" />
-                    <span>بيانات وشريط الإعلانات</span>
-                  </h3>
-                  <p className="text-xs text-[var(--muted)] mb-4">
-                    التحكم في نص الإعلان الأحمر وأرقام التواصل الرسمية
-                  </p>
-
-                  <form onSubmit={handleSaveSettings} className="space-y-4 w-full max-w-full box-border">
-                    <div className="w-full box-border">
-                      <label className="block text-xs font-bold mb-1">
-                        نص الشريط الإعلاني (أعلى الموقع)
-                      </label>
-                      <input
-                        type="text"
-                        value={bannerText}
-                        onChange={(e) => setBannerText(e.target.value)}
-                        placeholder="اتركه فاضي ليختفي"
-                        style={{ fontSize: '16px' }}
-                        className="w-full box-border px-3 py-2 rounded-xl border border-[var(--line)] bg-[var(--bg)] focus:outline-none focus:border-[var(--red)]"
-                      />
-                      <span className="text-[11px] text-[var(--muted)] mt-1 block">
-                        اتركه فاضي ليختفي تلقائياً من الصفحة.
-                      </span>
-                    </div>
-
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 w-full max-w-full box-border">
-                      <div className="w-full min-w-0 box-border">
-                        <label className="block text-xs font-bold mb-1 flex items-center gap-1.5">
-                          <Phone className="w-3.5 h-3.5 text-[var(--red)] shrink-0" />
-                          <span>رقم حمدر رجالي</span>
-                        </label>
-                        <input
-                          type="text"
-                          dir="ltr"
-                          value={menPhone}
-                          onChange={(e) => setMenPhone(e.target.value)}
-                          style={{ fontSize: '16px' }}
-                          className="w-full box-border px-3 py-2 rounded-xl border border-[var(--line)] bg-[var(--bg)] text-left focus:outline-none focus:border-[var(--red)] font-mono"
-                        />
-                      </div>
-
-                      <div className="w-full min-w-0 box-border">
-                        <label className="block text-xs font-bold mb-1 flex items-center gap-1.5">
-                          <Phone className="w-3.5 h-3.5 text-[var(--gold)] shrink-0" />
-                          <span>رقم حمدر نسائي</span>
-                        </label>
-                        <input
-                          type="text"
-                          dir="ltr"
-                          value={womenPhone}
-                          onChange={(e) => setWomenPhone(e.target.value)}
-                          style={{ fontSize: '16px' }}
-                          className="w-full box-border px-3 py-2 rounded-xl border border-[var(--line)] bg-[var(--bg)] text-left focus:outline-none focus:border-[var(--red)] font-mono"
-                        />
-                      </div>
-                    </div>
-
-                    <div className="w-full box-border">
-                      <button
-                        type="submit"
-                        disabled={isSavingSettings}
-                        className="touch-btn px-6 py-2.5 rounded-xl bg-[var(--ink)] text-[var(--bg)] font-bold text-sm hover:opacity-90 transition-opacity flex items-center gap-2 cursor-pointer disabled:opacity-50 max-w-full"
-                      >
-                        {isSavingSettings ? (
-                          <>
-                            <Loader2 className="w-4 h-4 animate-spin shrink-0" />
-                            <span>جاري الحفظ…</span>
-                          </>
-                        ) : (
-                          <>
-                            <Save className="w-4 h-4 shrink-0" />
-                            <span>حفظ إعدادات الموقع</span>
-                          </>
-                        )}
-                      </button>
-
-                      {settingsSuccess && (
-                        <div className="mt-2.5 inline-flex items-center gap-1.5 text-xs text-emerald-600 font-bold bg-emerald-500/10 px-3 py-1.5 rounded-lg">
-                          <CheckCircle2 className="w-4 h-4 shrink-0" />
-                          <span>تم الحفظ ✓</span>
-                        </div>
-                      )}
-
-                      {settingsError && (
-                        <div
-                          role="alert"
-                          className="mt-2.5 p-2.5 rounded-xl bg-red-500/15 border border-red-500/30 text-red-600 text-xs font-bold flex items-center gap-2"
-                        >
-                          <AlertTriangle className="w-4 h-4 shrink-0" />
-                          <span>{settingsError}</span>
-                        </div>
-                      )}
-                    </div>
-                  </form>
-                </section>
-
-                {/* Change Password Card */}
-                <section className="bg-[var(--card)] border border-[var(--line)] rounded-2xl p-4 sm:p-5 shadow-sm w-full max-w-full box-border overflow-hidden">
-                  <h3 className="font-bold text-base mb-1 flex items-center gap-2">
-                    <KeyRound className="w-4 h-4 text-[var(--gold)] shrink-0" />
-                    <span>تغيير الرمز السري</span>
-                  </h3>
-                  <p className="text-xs text-[var(--muted)] mb-3">
-                    تغيير رمز الدخول الخاص بالمسؤول
-                  </p>
-
-                  {passwordStatus && (
-                    <div
-                      className={`p-2.5 rounded-xl text-xs font-semibold mb-3 ${
-                        passwordStatus.includes('بنجاح')
-                          ? 'bg-emerald-500/10 text-emerald-600'
-                          : 'bg-red-500/10 text-red-600'
-                      }`}
-                    >
-                      {passwordStatus}
-                    </div>
-                  )}
-
-                  <form onSubmit={handleChangePassword} className="space-y-3 w-full max-w-full box-border">
-                    <div className="w-full box-border">
-                      <label className="block text-xs font-bold mb-1">
-                        الرمز السري الجديد
-                      </label>
-                      <input
-                        type="password"
-                        value={newAdminPassword}
-                        onChange={(e) => setNewAdminPassword(e.target.value)}
-                        placeholder="أدخل 6 أحرف أو أرقام على الأقل"
-                        style={{ fontSize: '16px' }}
-                        className="w-full box-border px-3 py-2 rounded-xl border border-[var(--line)] bg-[var(--bg)] focus:outline-none focus:border-[var(--red)]"
-                      />
-                    </div>
-
-                    <button
-                      type="submit"
-                      className="touch-btn px-5 py-2 rounded-xl border border-[var(--line)] bg-[var(--bg)] hover:bg-[var(--card)] font-bold text-xs transition-colors cursor-pointer max-w-full"
-                    >
-                      تحديث الرمز السري
-                    </button>
-                  </form>
-                </section>
-
-                {/* Database Connection Status Card */}
-                <section className="bg-[var(--card)] border border-[var(--line)] rounded-2xl p-4 sm:p-5 shadow-sm w-full max-w-full box-border overflow-hidden">
-                  <div className="flex items-center justify-between mb-2">
-                    <h3 className="font-bold text-xs sm:text-sm flex items-center gap-2">
-                      <Database className="w-4 h-4 text-[var(--red)] shrink-0" />
-                      <span>حالة الاتصال</span>
-                    </h3>
-                    {isFirebaseLiveMode() ? (
-                      <span className="px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-600 font-bold text-[11px]">
-                        ● متصل بـ Firebase
-                      </span>
-                    ) : (
-                      <span className="px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-600 font-bold text-[11px]">
-                        ● وضع التجربة
-                      </span>
-                    )}
-                  </div>
-                  <p className="text-[11px] text-[var(--muted)] leading-relaxed">
-                    قواعد الأمان مفعلة: القراءة متاحة للجميع، والكتابة محصورة بمدير المتجر المعتمد (admin@hamdar-site.app).
-                  </p>
-                </section>
-
-                {/* Logout Button */}
-                <div className="pt-1 text-center w-full box-border">
-                  <button
-                    type="button"
-                    onClick={handleLogout}
-                    className="touch-btn px-5 py-2 rounded-xl border border-red-500/20 text-red-600 hover:bg-red-500/10 text-xs font-bold transition-colors inline-flex items-center gap-2 cursor-pointer max-w-full"
-                  >
-                    <LogOut className="w-4 h-4" />
-                    <span>تسجيل الخروج من لوحة التحكم</span>
-                  </button>
                 </div>
               </div>
             )}
+
+            {/* TAB CONTENT: SETTINGS */}
+            {activeTab === 'settings' && (
+              <form onSubmit={handleSaveSettings} className="space-y-4">
+                <div className="bg-[var(--card)] border border-[var(--line)] rounded-2xl p-4 sm:p-5 space-y-4 shadow-xl">
+                  {/* Announcement Banner */}
+                  <div>
+                    <label className="block text-xs font-bold text-[var(--ink)] mb-1.5 flex items-center gap-1.5">
+                      <Megaphone className="w-4 h-4 text-[var(--red)]" />
+                      <span>شريط الإعلانات العلوي (فارغ = مخفي)</span>
+                    </label>
+                    <input
+                      type="text"
+                      value={bannerText}
+                      onChange={(e) => setBannerText(e.target.value)}
+                      placeholder="مثال: خصم 20% على جميع البدلات الرجالية بمناسبة الموسم"
+                      className="w-full h-11 px-3 rounded-xl border border-[var(--line)] bg-[var(--bg)] text-[var(--ink)] text-base focus:border-[var(--red)] focus:outline-none"
+                    />
+                    <p className="text-[10px] text-[var(--muted)] mt-1">
+                      يظهر كشريط أحمر أنيق في أعلى الموقع لجذب انتباه الزوار.
+                    </p>
+                  </div>
+
+                  {/* Hero Background Image */}
+                  <div>
+                    <label className="block text-xs font-bold text-[var(--ink)] mb-2 flex items-center gap-1.5">
+                      <Sparkles className="w-4 h-4 text-[var(--gold)]" />
+                      <span>صورة خلفية الواجهة الرئيسية (Hero)</span>
+                    </label>
+                    <div className="flex items-center gap-3">
+                      <div className="w-24 h-16 rounded-xl border-2 border-dashed border-[var(--line)] overflow-hidden bg-[var(--bg)] flex items-center justify-center relative shrink-0">
+                        {isCompressingHero ? (
+                          <Loader2 className="w-6 h-6 animate-spin text-[var(--muted)]" />
+                        ) : heroImageBase64 ? (
+                          <img
+                            src={heroImageBase64}
+                            alt="Hero Preview"
+                            className="w-full h-full object-cover"
+                          />
+                        ) : (
+                          <span className="text-[10px] text-[var(--muted)]">بدون خلفية</span>
+                        )}
+                      </div>
+
+                      <div className="space-y-1.5 flex-1 min-w-0">
+                        <input
+                          type="file"
+                          ref={heroFileInputRef}
+                          accept="image/*"
+                          onChange={handleHeroImageChange}
+                          className="hidden"
+                          id="hero-photo-input"
+                        />
+                        <label
+                          htmlFor="hero-photo-input"
+                          className="touch-btn inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-[var(--bg)] border border-[var(--line)] hover:border-[var(--muted)] text-xs font-bold text-[var(--ink)] cursor-pointer"
+                        >
+                          <Upload className="w-3.5 h-3.5" />
+                          <span>تغيير صورة الواجهة</span>
+                        </label>
+
+                        {heroImageBase64 && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setHeroImageBase64('');
+                              if (heroFileInputRef.current) heroFileInputRef.current.value = '';
+                            }}
+                            className="block text-[11px] text-red-500 hover:underline cursor-pointer"
+                          >
+                            حذف صورة الواجهة واستخدام الخلفية الداكنة
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Phone Numbers */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2 border-t border-[var(--line)]">
+                    <div>
+                      <label className="block text-xs font-bold text-[var(--ink)] mb-1 flex items-center gap-1.5">
+                        <Phone className="w-3.5 h-3.5 text-[var(--red)]" />
+                        <span>رقم هاتف / واتساب (رجالي)</span>
+                      </label>
+                      <input
+                        type="text"
+                        value={menPhoneVal}
+                        onChange={(e) => setMenPhoneVal(e.target.value)}
+                        placeholder="76 320 279"
+                        dir="ltr"
+                        className="w-full h-11 px-3 rounded-xl border border-[var(--line)] bg-[var(--bg)] text-[var(--ink)] text-base font-bold focus:border-[var(--red)] focus:outline-none"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-bold text-[var(--ink)] mb-1 flex items-center gap-1.5">
+                        <Phone className="w-3.5 h-3.5 text-[var(--gold)]" />
+                        <span>رقم هاتف / واتساب (نسائي)</span>
+                      </label>
+                      <input
+                        type="text"
+                        value={womenPhoneVal}
+                        onChange={(e) => setWomenPhoneVal(e.target.value)}
+                        placeholder="81 612 154"
+                        dir="ltr"
+                        className="w-full h-11 px-3 rounded-xl border border-[var(--line)] bg-[var(--bg)] text-[var(--ink)] text-base font-bold focus:border-[var(--red)] focus:outline-none"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Feedback */}
+                  {settingsError && (
+                    <div className="p-3 rounded-xl bg-red-500/10 border border-red-500/20 text-red-500 text-xs font-bold">
+                      {settingsError}
+                    </div>
+                  )}
+
+                  {settingsSuccess && (
+                    <div className="p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-500 text-xs font-bold flex items-center gap-1.5">
+                      <CheckCircle2 className="w-4 h-4" />
+                      <span>تم الحفظ ✓</span>
+                    </div>
+                  )}
+
+                  <button
+                    type="submit"
+                    disabled={isSavingSettings || isCompressingHero}
+                    className="touch-btn w-full h-12 rounded-xl bg-[var(--red)] hover:bg-[#a31117] text-white font-bold text-base transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50 shadow-md"
+                  >
+                    {isSavingSettings ? (
+                      <>
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                        <span>جاري حفظ الإعدادات...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Save className="w-4 h-4" />
+                        <span>حفظ الإعدادات</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+              </form>
+            )}
           </div>
+        )}
+      </main>
 
-          {/* Sticky Bottom Bar */}
-          <footer className="sticky bottom-0 bg-[var(--card)] border-t border-[var(--line)] px-3 py-2 flex flex-wrap items-center justify-between gap-2 safe-bottom w-full max-w-full shrink-0 box-border">
-            <button
-              onClick={handleLogout}
-              className="touch-btn px-2.5 py-1 rounded-lg border border-red-500/20 text-red-600 hover:bg-red-500/10 text-xs font-bold transition-colors inline-flex items-center gap-1 cursor-pointer"
-            >
-              <LogOut className="w-3.5 h-3.5" />
-              <span>تسجيل الخروج</span>
-            </button>
-            <button
-              onClick={onClose}
-              className="touch-btn px-4 py-1.5 rounded-xl bg-[var(--ink)] text-[var(--bg)] font-bold text-xs hover:opacity-90 transition-opacity cursor-pointer"
-            >
-              إغلاق والعودة للمتجر
-            </button>
-          </footer>
-        </div>
-      )}
-
-      {/* Edit Product Modal (Tapping any product opens this editor) */}
+      {/* 3. EDIT PRODUCT MODAL DRAWER */}
       {editingProduct && (
         <div
+          role="dialog"
+          aria-modal="true"
+          className="fixed inset-0 z-60 bg-black/80 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4 overflow-y-auto"
           dir="rtl"
-          className="fixed inset-0 z-60 bg-black/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 overflow-y-auto w-full max-w-full box-border"
         >
-          <div className="w-full max-w-lg bg-[var(--card)] border border-[var(--line)] rounded-2xl p-4 sm:p-6 shadow-xl my-auto box-border overflow-hidden">
-            <div className="flex items-center justify-between pb-3 mb-4 border-b border-[var(--line)] w-full box-border">
-              <h3 className="font-bold text-base flex items-center gap-2">
-                <Edit3 className="w-4 h-4 text-[var(--red)]" />
-                <span>تعديل المنتج</span>
-              </h3>
+          <div className="bg-[var(--card)] border border-[var(--line)] rounded-t-2xl sm:rounded-2xl max-w-md w-full p-4 sm:p-6 space-y-4 max-h-[90vh] overflow-y-auto shadow-2xl animate-in slide-in-from-bottom duration-200">
+            <div className="flex items-center justify-between border-b border-[var(--line)] pb-3">
+              <h3 className="font-bold text-base text-[var(--ink)]">تعديل المنتج</h3>
               <button
-                type="button"
                 onClick={() => setEditingProduct(null)}
-                className="p-1 rounded-lg hover:bg-[var(--bg)] text-[var(--muted)] hover:text-[var(--ink)] cursor-pointer"
+                className="w-8 h-8 rounded-lg bg-[var(--bg)] flex items-center justify-center text-[var(--muted)] hover:text-[var(--ink)]"
               >
-                <X className="w-5 h-5" />
+                <X className="w-4 h-4" />
               </button>
             </div>
 
-            <form onSubmit={handleSaveEdit} className="space-y-4 w-full box-border">
-              {/* Photo preview and replace button */}
-              <div className="w-full box-border">
-                <label className="block text-xs font-bold mb-1.5">صورة المنتج</label>
-                <div className="flex items-center gap-3 w-full box-border">
-                  <div className="w-20 h-20 rounded-xl overflow-hidden border border-[var(--line)] bg-[var(--bg)] shrink-0 relative box-border">
-                    {editImageUrl ? (
+            <form onSubmit={handleSaveEdit} className="space-y-3.5">
+              {/* Photo preview and replace */}
+              <div>
+                <label className="block text-xs font-bold text-[var(--ink)] mb-1.5">
+                  الصورة
+                </label>
+                <div className="flex items-center gap-3">
+                  <div className="w-16 h-20 rounded-lg overflow-hidden bg-[var(--bg)] border border-[var(--line)] shrink-0 relative">
+                    {isCompressingEdit ? (
+                      <Loader2 className="w-5 h-5 animate-spin text-[var(--muted)]" />
+                    ) : editImageBase64 ? (
                       <img
-                        src={editImageUrl}
-                        alt="Preview"
+                        src={editImageBase64}
+                        alt="Product"
                         className="w-full h-full object-cover"
                       />
                     ) : (
-                      <div className="w-full h-full diagonal-placeholder flex items-center justify-center text-[10px] text-[var(--muted)] font-mono">
-                        بدون صورة
-                      </div>
+                      <span className="text-[10px] text-[var(--muted)]">بلا صورة</span>
                     )}
                   </div>
-                  <div className="space-y-1.5 flex-1 min-w-0 box-border">
+
+                  <div className="space-y-1 flex-1">
                     <input
-                      ref={editFileInputRef}
                       type="file"
+                      ref={editFileInputRef}
                       accept="image/*"
-                      onChange={handleEditImageSelect}
+                      onChange={handleEditImageChange}
                       className="hidden"
+                      id="edit-product-photo"
                     />
-                    <button
-                      type="button"
-                      onClick={() => editFileInputRef.current?.click()}
-                      className="touch-btn px-3 py-1.5 rounded-xl border border-[var(--line)] bg-[var(--bg)] hover:bg-[var(--card)] text-xs font-bold flex items-center gap-1.5 cursor-pointer max-w-full"
+                    <label
+                      htmlFor="edit-product-photo"
+                      className="touch-btn inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[var(--bg)] border border-[var(--line)] text-xs font-bold text-[var(--ink)] cursor-pointer"
                     >
-                      <Upload className="w-3.5 h-3.5 text-[var(--red)]" />
-                      <span className="truncate">استبدال الصورة</span>
-                    </button>
-                    {editImageUrl && (
+                      <Upload className="w-3.5 h-3.5" />
+                      <span>تغيير الصورة</span>
+                    </label>
+
+                    {editImageBase64 && (
                       <button
                         type="button"
-                        onClick={() => setEditImageUrl('')}
-                        className="text-[11px] text-red-500 hover:underline block cursor-pointer"
+                        onClick={() => {
+                          setEditImageBase64('');
+                          if (editFileInputRef.current) editFileInputRef.current.value = '';
+                        }}
+                        className="block text-[11px] text-red-500 hover:underline cursor-pointer"
                       >
-                        حذف الصورة الحالية
+                        إزالة الصورة الحالية
                       </button>
                     )}
                   </div>
                 </div>
               </div>
 
-              {/* Editable Name Ar */}
-              <div className="w-full box-border">
-                <label className="block text-xs font-bold mb-1">
-                  الاسم بالعربية <span className="text-red-500">*</span>
+              <div>
+                <label className="block text-xs font-bold text-[var(--ink)] mb-1">
+                  الاسم بالعربية <span className="text-[var(--red)]">*</span>
                 </label>
                 <input
                   type="text"
                   required
                   value={editNameAr}
                   onChange={(e) => setEditNameAr(e.target.value)}
-                  style={{ fontSize: '16px' }}
-                  className="w-full box-border px-3 py-2 rounded-xl border border-[var(--line)] bg-[var(--bg)] focus:outline-none focus:border-[var(--red)]"
+                  className="w-full h-11 px-3 rounded-xl border border-[var(--line)] bg-[var(--bg)] text-[var(--ink)] text-base focus:border-[var(--red)] focus:outline-none"
                 />
               </div>
 
-              {/* Editable Name En */}
-              <div className="w-full box-border">
-                <label className="block text-xs font-bold mb-1">
-                  الاسم بالإنجليزية (اختياري)
+              <div>
+                <label className="block text-xs font-bold text-[var(--ink)] mb-1">
+                  الاسم بالإنجليزية
                 </label>
                 <input
                   type="text"
-                  dir="ltr"
                   value={editNameEn}
                   onChange={(e) => setEditNameEn(e.target.value)}
-                  style={{ fontSize: '16px' }}
-                  className="w-full box-border px-3 py-2 rounded-xl border border-[var(--line)] bg-[var(--bg)] focus:outline-none focus:border-[var(--red)] text-left"
-                />
-              </div>
-
-              {/* Editable Price */}
-              <div className="w-full box-border">
-                <label className="block text-xs font-bold mb-1">السعر ($)</label>
-                <input
-                  type="text"
                   dir="ltr"
-                  value={editPrice}
-                  onChange={(e) => setEditPrice(e.target.value)}
-                  placeholder="مثال: 25 أو $25"
-                  style={{ fontSize: '16px' }}
-                  className="w-full box-border px-3 py-2 rounded-xl border border-[var(--line)] bg-[var(--bg)] focus:outline-none focus:border-[var(--red)] text-left"
+                  className="w-full h-11 px-3 rounded-xl border border-[var(--line)] bg-[var(--bg)] text-[var(--ink)] text-base focus:border-[var(--red)] focus:outline-none"
                 />
               </div>
 
-              {/* Actions & Feedback */}
-              <div className="pt-2 flex flex-wrap items-center justify-between gap-2 border-t border-[var(--line)] w-full box-border">
-                <div className="flex items-center gap-2">
-                  <button
-                    type="submit"
-                    disabled={isUpdating}
-                    className="touch-btn px-5 py-2 rounded-xl bg-[var(--red)] hover:bg-[#a51217] text-white font-bold text-xs flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
-                  >
-                    {isUpdating ? (
-                      <>
-                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                        <span>جاري الحفظ…</span>
-                      </>
-                    ) : (
-                      <>
-                        <Save className="w-3.5 h-3.5" />
-                        <span>حفظ التعديلات</span>
-                      </>
-                    )}
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => handleDeleteProduct(editingProduct.id)}
-                    className="touch-btn px-3 py-2 rounded-xl border border-red-500/20 text-red-600 hover:bg-red-500/10 font-bold text-xs flex items-center gap-1 cursor-pointer"
-                  >
-                    <Trash2 className="w-3.5 h-3.5" />
-                    <span>حذف</span>
-                  </button>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-bold text-[var(--ink)] mb-1">
+                    التصنيف
+                  </label>
+                  <input
+                    type="text"
+                    value={editCategory}
+                    onChange={(e) => setEditCategory(e.target.value)}
+                    className="w-full h-11 px-3 rounded-xl border border-[var(--line)] bg-[var(--bg)] text-[var(--ink)] text-base focus:border-[var(--red)] focus:outline-none"
+                  />
                 </div>
 
-                <button
-                  type="button"
-                  onClick={() => setEditingProduct(null)}
-                  className="touch-btn px-4 py-2 rounded-xl border border-[var(--line)] bg-[var(--bg)] hover:bg-[var(--card)] font-bold text-xs cursor-pointer"
-                >
-                  إلغاء
-                </button>
+                <div>
+                  <label className="block text-xs font-bold text-[var(--ink)] mb-1">
+                    السعر ($)
+                  </label>
+                  <input
+                    type="text"
+                    value={editPrice}
+                    onChange={(e) => setEditPrice(e.target.value)}
+                    dir="ltr"
+                    className="w-full h-11 px-3 rounded-xl border border-[var(--line)] bg-[var(--bg)] text-[var(--ink)] text-base font-bold focus:border-[var(--red)] focus:outline-none"
+                  />
+                </div>
               </div>
 
+              {editError && (
+                <div className="p-2.5 rounded-lg bg-red-500/10 border border-red-500/20 text-red-500 text-xs font-bold">
+                  {editError}
+                </div>
+              )}
+
               {editSuccess && (
-                <div className="p-2 rounded-lg bg-emerald-500/10 text-emerald-600 text-xs font-bold flex items-center gap-1.5">
-                  <CheckCircle2 className="w-4 h-4 shrink-0" />
+                <div className="p-2.5 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-emerald-500 text-xs font-bold flex items-center gap-1.5">
+                  <CheckCircle2 className="w-4 h-4" />
                   <span>تم الحفظ ✓</span>
                 </div>
               )}
 
-              {editError && (
-                <div
-                  role="alert"
-                  className="p-2.5 rounded-lg bg-red-500/15 border border-red-500/30 text-red-600 text-xs font-bold flex items-center gap-1.5"
+              <div className="flex items-center gap-2 pt-2">
+                <button
+                  type="submit"
+                  disabled={isSavingEdit || isCompressingEdit}
+                  className="touch-btn flex-1 h-11 rounded-xl bg-[var(--red)] hover:bg-[#a31117] text-white font-bold text-sm transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
                 >
-                  <AlertTriangle className="w-4 h-4 shrink-0" />
-                  <span>{editError}</span>
-                </div>
-              )}
+                  {isSavingEdit ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      <span>جاري الحفظ...</span>
+                    </>
+                  ) : (
+                    <span>حفظ التعديلات</span>
+                  )}
+                </button>
+
+                <button
+                  type="button"
+                  disabled={isDeleting}
+                  onClick={handleDeleteProduct}
+                  className="touch-btn px-4 h-11 rounded-xl border border-red-500/30 text-red-500 hover:bg-red-500/10 font-bold text-sm transition-all flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50"
+                  title="حذف المنتج نهائياً"
+                >
+                  {isDeleting ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <>
+                      <Trash2 className="w-4 h-4" />
+                      <span>حذف</span>
+                    </>
+                  )}
+                </button>
+              </div>
             </form>
           </div>
         </div>
