@@ -15,6 +15,7 @@ import {
   Database,
   Eye,
   EyeOff,
+  AlertTriangle,
 } from 'lucide-react';
 import { Product, SiteSettings, StoreType } from '../types';
 import {
@@ -23,7 +24,6 @@ import {
   deleteProduct,
   updateSettings,
   adminLogin,
-  adminLoginWithGoogle,
   adminLogout,
   adminChangePassword,
   uploadProductImage,
@@ -38,6 +38,9 @@ interface AdminModalProps {
   user: any;
 }
 
+const LOCKOUT_KEY = 'hamdar_admin_lockout_until';
+const ATTEMPTS_KEY = 'hamdar_admin_failed_attempts';
+
 export const AdminModal: React.FC<AdminModalProps> = ({
   isOpen,
   onClose,
@@ -48,12 +51,14 @@ export const AdminModal: React.FC<AdminModalProps> = ({
   const [activeTab, setActiveTab] = useState<StoreType | 'settings'>('men');
   const [statusMsg, setStatusMsg] = useState<'idle' | 'saving' | 'saved'>('idle');
 
-  // Auth form
-  const [email, setEmail] = useState('owner@hamdarfashion.com');
-  const [password, setPassword] = useState('');
+  // Single passcode auth
+  const [passcode, setPasscode] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [authError, setAuthError] = useState('');
   const [authLoading, setAuthLoading] = useState(false);
+
+  // Lockout state
+  const [lockoutSeconds, setLockoutSeconds] = useState(0);
 
   // Add product form
   const [newStore, setNewStore] = useState<StoreType>('men');
@@ -71,6 +76,30 @@ export const AdminModal: React.FC<AdminModalProps> = ({
   const [womenPhone, setWomenPhone] = useState(settings.womenPhone);
   const [newAdminPassword, setNewAdminPassword] = useState('');
   const [passwordStatus, setPasswordStatus] = useState('');
+
+  // Lockout timer ticker
+  useEffect(() => {
+    const checkLockout = () => {
+      const stored = localStorage.getItem(LOCKOUT_KEY);
+      if (stored) {
+        const lockoutTime = parseInt(stored, 10);
+        const remaining = Math.ceil((lockoutTime - Date.now()) / 1000);
+        if (remaining > 0) {
+          setLockoutSeconds(remaining);
+        } else {
+          setLockoutSeconds(0);
+          localStorage.removeItem(LOCKOUT_KEY);
+          localStorage.removeItem(ATTEMPTS_KEY);
+        }
+      } else {
+        setLockoutSeconds(0);
+      }
+    };
+
+    checkLockout();
+    const interval = setInterval(checkLockout, 1000);
+    return () => clearInterval(interval);
+  }, []);
 
   // Keep settings in sync when props change
   useEffect(() => {
@@ -97,29 +126,39 @@ export const AdminModal: React.FC<AdminModalProps> = ({
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (lockoutSeconds > 0) return;
+
     setAuthError('');
     setAuthLoading(true);
+
     try {
-      await adminLogin(email, password);
-      setPassword('');
+      await adminLogin(passcode);
+      setPasscode('');
+      localStorage.removeItem(ATTEMPTS_KEY);
+      localStorage.removeItem(LOCKOUT_KEY);
+      setLockoutSeconds(0);
     } catch {
-      // Prompt specifically requires: Show an Arabic error "الرمز غلط" on failure.
-      setAuthError('الرمز غلط');
+      // Record failed attempts
+      const currentAttempts = parseInt(localStorage.getItem(ATTEMPTS_KEY) || '0', 10) + 1;
+      localStorage.setItem(ATTEMPTS_KEY, currentAttempts.toString());
+
+      if (currentAttempts >= 5) {
+        const lockoutUntil = Date.now() + 60 * 1000;
+        localStorage.setItem(LOCKOUT_KEY, lockoutUntil.toString());
+        setLockoutSeconds(60);
+        setAuthError('الرمز غلط');
+      } else {
+        setAuthError('الرمز غلط');
+      }
     } finally {
       setAuthLoading(false);
     }
   };
 
-  const handleGoogleLogin = async () => {
+  const handleLogout = async () => {
+    await adminLogout();
+    setPasscode('');
     setAuthError('');
-    setAuthLoading(true);
-    try {
-      await adminLoginWithGoogle();
-    } catch {
-      setAuthError('الرمز غلط');
-    } finally {
-      setAuthLoading(false);
-    }
   };
 
   const handleImageSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -154,7 +193,6 @@ export const AdminModal: React.FC<AdminModalProps> = ({
         imageUrl: uploadedUrl,
       });
 
-      // Reset form
       setNewNameAr('');
       setNewNameEn('');
       setNewPrice('');
@@ -171,8 +209,7 @@ export const AdminModal: React.FC<AdminModalProps> = ({
     }
   };
 
-  const handleDeleteProduct = async (id: string, name: string) => {
-    // Prompt requirement: confirm("حذف هذا المنتج؟")
+  const handleDeleteProduct = async (id: string) => {
     if (window.confirm('حذف هذا المنتج؟')) {
       showStatus('saving');
       try {
@@ -254,8 +291,8 @@ export const AdminModal: React.FC<AdminModalProps> = ({
           </div>
         </div>
 
-        {/* Status Indicator */}
-        <div className="flex items-center gap-3">
+        {/* Status Indicator & Global Actions */}
+        <div className="flex items-center gap-2 sm:gap-3">
           {statusMsg === 'saving' && (
             <span className="inline-flex items-center gap-1.5 text-xs text-[var(--gold)] font-medium bg-[var(--gold)]/10 px-2.5 py-1 rounded-full animate-pulse">
               <Loader2 className="w-3.5 h-3.5 animate-spin" />
@@ -267,6 +304,17 @@ export const AdminModal: React.FC<AdminModalProps> = ({
               <CheckCircle2 className="w-3.5 h-3.5" />
               تم الحفظ
             </span>
+          )}
+
+          {user && (
+            <button
+              onClick={handleLogout}
+              className="touch-btn px-3 py-1.5 rounded-lg border border-red-500/20 text-red-600 hover:bg-red-500/10 text-xs font-bold transition-colors flex items-center gap-1.5"
+              aria-label="تسجيل الخروج"
+            >
+              <LogOut className="w-3.5 h-3.5" />
+              <span>تسجيل الخروج</span>
+            </button>
           )}
 
           <button
@@ -282,60 +330,60 @@ export const AdminModal: React.FC<AdminModalProps> = ({
 
       {/* Main Content Area */}
       {!user ? (
-        // Login View
+        // Single Passcode Login View
         <div className="flex-1 overflow-y-auto p-4 sm:p-8 flex items-center justify-center">
-          <div className="w-full max-w-md bg-[var(--card)] border border-[var(--line)] rounded-2xl p-6 sm:p-8 shadow-sm">
+          <div className="w-full max-w-sm bg-[var(--card)] border border-[var(--line)] rounded-2xl p-6 sm:p-8 shadow-sm">
             <div className="text-center mb-6">
               <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-[var(--red)]/10 text-[var(--red)] mb-3">
                 <Lock className="w-7 h-7" />
               </div>
               <h3 className="text-xl font-bold">دخول الإدارة</h3>
-              <p className="text-xs sm:text-sm text-[var(--muted)] mt-1">
-                خاص بصاحب المحل فقط لإدارة المنتجات والأسعار
+              <p className="text-xs text-[var(--muted)] mt-1">
+                أدخل الرمز السري للمتابعة
               </p>
             </div>
 
             {authError && (
               <div
                 role="alert"
-                className="mb-5 p-3.5 rounded-xl bg-red-500/15 border border-red-500/30 text-red-600 text-center font-bold text-base animate-shake"
+                className="mb-5 p-3 rounded-xl bg-red-500/15 border border-red-500/30 text-red-600 text-center font-bold text-sm animate-shake"
               >
                 {authError}
               </div>
             )}
 
+            {lockoutSeconds > 0 && (
+              <div
+                role="alert"
+                className="mb-5 p-3.5 rounded-xl bg-amber-500/15 border border-amber-500/30 text-amber-600 text-center text-xs font-bold flex flex-col items-center gap-1"
+              >
+                <AlertTriangle className="w-5 h-5" />
+                <span>تم قفل النموذج مؤقتاً بسبب 5 محاولات خاطئة.</span>
+                <span>يرجى الانتظار {lockoutSeconds} ثانية.</span>
+              </div>
+            )}
+
             <form onSubmit={handleLogin} className="space-y-4">
               <div>
-                <label className="block text-xs font-semibold mb-1 text-[var(--muted)]">
-                  البريد الإلكتروني
-                </label>
-                <input
-                  type="email"
-                  required
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  className="w-full px-3.5 py-2.5 rounded-xl border border-[var(--line)] bg-[var(--bg)] text-[var(--ink)] text-sm focus:outline-none focus:border-[var(--red)]"
-                  placeholder="admin@hamdar.com"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold mb-1 text-[var(--muted)]">
-                  كلمة المرور
+                <label className="block text-xs font-bold mb-1.5 text-[var(--ink)]">
+                  الرمز السري
                 </label>
                 <div className="relative">
                   <input
                     type={showPassword ? 'text' : 'password'}
                     required
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    className="w-full px-3.5 py-2.5 rounded-xl border border-[var(--line)] bg-[var(--bg)] text-[var(--ink)] text-sm focus:outline-none focus:border-[var(--red)] pl-10"
+                    disabled={lockoutSeconds > 0}
+                    value={passcode}
+                    onChange={(e) => setPasscode(e.target.value)}
+                    className="w-full px-3.5 py-2.5 rounded-xl border border-[var(--line)] bg-[var(--bg)] text-[var(--ink)] text-sm focus:outline-none focus:border-[var(--red)] pl-10 disabled:opacity-50"
                     placeholder="••••••••"
+                    autoFocus
                   />
                   <button
                     type="button"
+                    disabled={lockoutSeconds > 0}
                     onClick={() => setShowPassword(!showPassword)}
-                    className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--muted)] hover:text-[var(--ink)] p-1"
+                    className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--muted)] hover:text-[var(--ink)] p-1 disabled:opacity-50"
                   >
                     {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                   </button>
@@ -344,46 +392,21 @@ export const AdminModal: React.FC<AdminModalProps> = ({
 
               <button
                 type="submit"
-                disabled={authLoading}
-                className="touch-btn w-full mt-2 rounded-xl bg-[var(--red)] hover:bg-[#a51217] text-white font-bold transition-all shadow-sm disabled:opacity-50"
+                disabled={authLoading || lockoutSeconds > 0}
+                className="touch-btn w-full mt-2 rounded-xl bg-[var(--red)] hover:bg-[#a51217] text-white font-bold transition-all shadow-sm disabled:opacity-50 cursor-pointer"
               >
                 {authLoading ? (
                   <span className="flex items-center gap-2">
                     <Loader2 className="w-4 h-4 animate-spin" />
                     جاري التحقق…
                   </span>
+                ) : lockoutSeconds > 0 ? (
+                  `يرجى الانتظار (${lockoutSeconds} ثانية)`
                 ) : (
-                  'تسجيل الدخول'
+                  'دخول'
                 )}
               </button>
-
-              {isFirebaseLiveMode() && (
-                <div className="pt-1">
-                  <div className="relative flex py-2 items-center">
-                    <div className="flex-grow border-t border-[var(--line)]"></div>
-                    <span className="flex-shrink mx-2 text-[11px] text-[var(--muted)]">أو</span>
-                    <div className="flex-grow border-t border-[var(--line)]"></div>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={handleGoogleLogin}
-                    disabled={authLoading}
-                    className="touch-btn w-full rounded-xl border border-[var(--line)] bg-[var(--bg)] hover:bg-[var(--card)] font-bold text-xs text-[var(--ink)] transition-colors flex items-center justify-center gap-2"
-                  >
-                    <span>دخول بحساب Google المعتمد (المالك)</span>
-                  </button>
-                </div>
-              )}
             </form>
-
-            {!isFirebaseLiveMode() && (
-              <div className="mt-6 pt-4 border-t border-[var(--line)] text-center">
-                <p className="text-xs text-[var(--muted)] leading-relaxed">
-                  💡 <span className="font-semibold">وضع التجربة (Demo):</span> يمكنك الدخول مباشرة
-                  باستخدام كلمة المرور: <code className="font-mono bg-[var(--bg)] px-1.5 py-0.5 rounded border border-[var(--line)] text-[var(--red)]">hamdar2026</code>
-                </p>
-              </div>
-            )}
           </div>
         </div>
       ) : (
@@ -393,7 +416,7 @@ export const AdminModal: React.FC<AdminModalProps> = ({
           <div className="flex border-b border-[var(--line)] bg-[var(--card)] px-4 gap-2 overflow-x-auto">
             <button
               onClick={() => setActiveTab('men')}
-              className={`touch-btn px-4 text-sm font-bold border-b-2 transition-all whitespace-nowrap ${
+              className={`touch-btn px-4 text-sm font-bold border-b-2 transition-all whitespace-nowrap cursor-pointer ${
                 activeTab === 'men'
                   ? 'border-[var(--red)] text-[var(--red)]'
                   : 'border-transparent text-[var(--muted)] hover:text-[var(--ink)]'
@@ -407,7 +430,7 @@ export const AdminModal: React.FC<AdminModalProps> = ({
 
             <button
               onClick={() => setActiveTab('women')}
-              className={`touch-btn px-4 text-sm font-bold border-b-2 transition-all whitespace-nowrap ${
+              className={`touch-btn px-4 text-sm font-bold border-b-2 transition-all whitespace-nowrap cursor-pointer ${
                 activeTab === 'women'
                   ? 'border-[var(--gold)] text-[var(--gold)]'
                   : 'border-transparent text-[var(--muted)] hover:text-[var(--ink)]'
@@ -421,7 +444,7 @@ export const AdminModal: React.FC<AdminModalProps> = ({
 
             <button
               onClick={() => setActiveTab('settings')}
-              className={`touch-btn px-4 text-sm font-bold border-b-2 transition-all whitespace-nowrap ${
+              className={`touch-btn px-4 text-sm font-bold border-b-2 transition-all whitespace-nowrap cursor-pointer ${
                 activeTab === 'settings'
                   ? 'border-[var(--ink)] text-[var(--ink)]'
                   : 'border-transparent text-[var(--muted)] hover:text-[var(--ink)]'
@@ -482,7 +505,7 @@ export const AdminModal: React.FC<AdminModalProps> = ({
                           <button
                             type="button"
                             onClick={() => fileInputRef.current?.click()}
-                            className="touch-btn px-4 py-2 rounded-xl border border-[var(--line)] bg-[var(--card)] hover:bg-[var(--bg)] font-semibold text-xs text-[var(--ink)] flex items-center gap-2"
+                            className="touch-btn px-4 py-2 rounded-xl border border-[var(--line)] bg-[var(--card)] hover:bg-[var(--bg)] font-semibold text-xs text-[var(--ink)] flex items-center gap-2 cursor-pointer"
                           >
                             <ImageIcon className="w-4 h-4 text-[var(--red)]" />
                             {imagePreview ? 'تغيير الصورة المحددة' : 'فتح المعرض أو الكاميرا'}
@@ -544,7 +567,7 @@ export const AdminModal: React.FC<AdminModalProps> = ({
                       <button
                         type="submit"
                         disabled={isAdding}
-                        className="touch-btn px-6 py-2.5 rounded-xl bg-[var(--red)] hover:bg-[#a51217] text-white font-bold text-sm transition-all shadow-sm disabled:opacity-50 flex items-center gap-2"
+                        className="touch-btn px-6 py-2.5 rounded-xl bg-[var(--red)] hover:bg-[#a51217] text-white font-bold text-sm transition-all shadow-sm disabled:opacity-50 flex items-center gap-2 cursor-pointer"
                       >
                         {isAdding ? (
                           <>
@@ -656,9 +679,9 @@ export const AdminModal: React.FC<AdminModalProps> = ({
                           {/* Delete button */}
                           <button
                             type="button"
-                            onClick={() => handleDeleteProduct(prod.id, prod.nameAr)}
+                            onClick={() => handleDeleteProduct(prod.id)}
                             title="حذف المنتج"
-                            className="touch-btn w-9 h-9 rounded-lg text-red-600 hover:bg-red-500/10 flex items-center justify-center shrink-0 transition-colors"
+                            className="touch-btn w-9 h-9 rounded-lg text-red-600 hover:bg-red-500/10 flex items-center justify-center shrink-0 transition-colors cursor-pointer"
                           >
                             <Trash2 className="w-4 h-4" />
                           </button>
@@ -730,7 +753,7 @@ export const AdminModal: React.FC<AdminModalProps> = ({
 
                     <button
                       type="submit"
-                      className="touch-btn px-6 py-2.5 rounded-xl bg-[var(--ink)] text-[var(--bg)] font-bold text-sm hover:opacity-90 transition-opacity flex items-center gap-2"
+                      className="touch-btn px-6 py-2.5 rounded-xl bg-[var(--ink)] text-[var(--bg)] font-bold text-sm hover:opacity-90 transition-opacity flex items-center gap-2 cursor-pointer"
                     >
                       <Save className="w-4 h-4" />
                       حفظ إعدادات الموقع
@@ -742,7 +765,7 @@ export const AdminModal: React.FC<AdminModalProps> = ({
                 <section className="bg-[var(--card)] border border-[var(--line)] rounded-2xl p-5 sm:p-6 shadow-sm">
                   <h3 className="font-bold text-lg mb-1 flex items-center gap-2">
                     <KeyRound className="w-5 h-5 text-[var(--gold)]" />
-                    تغيير كلمة المرور
+                    تغيير الرمز السري
                   </h3>
                   <p className="text-xs text-[var(--muted)] mb-4">
                     تغيير الرمز السري للدخول إلى لوحة التحكم
@@ -763,7 +786,7 @@ export const AdminModal: React.FC<AdminModalProps> = ({
                   <form onSubmit={handleChangePassword} className="space-y-4">
                     <div>
                       <label className="block text-xs font-bold mb-1">
-                        كلمة المرور الجديدة
+                        الرمز السري الجديد
                       </label>
                       <input
                         type="password"
@@ -776,14 +799,14 @@ export const AdminModal: React.FC<AdminModalProps> = ({
 
                     <button
                       type="submit"
-                      className="touch-btn px-6 py-2.5 rounded-xl border border-[var(--line)] bg-[var(--bg)] hover:bg-[var(--card)] font-bold text-sm transition-colors"
+                      className="touch-btn px-6 py-2.5 rounded-xl border border-[var(--line)] bg-[var(--bg)] hover:bg-[var(--card)] font-bold text-sm transition-colors cursor-pointer"
                     >
-                      تحديث كلمة المرور
+                      تحديث الرمز السري
                     </button>
                   </form>
                 </section>
 
-                {/* Database Connection Status & Instructions Card */}
+                {/* Database Connection Status Card */}
                 <section className="bg-[var(--card)] border border-[var(--line)] rounded-2xl p-5 sm:p-6 shadow-sm">
                   <div className="flex items-center justify-between mb-3">
                     <h3 className="font-bold text-sm flex items-center gap-2">
@@ -796,13 +819,12 @@ export const AdminModal: React.FC<AdminModalProps> = ({
                       </span>
                     ) : (
                       <span className="px-2.5 py-1 rounded-full bg-amber-500/15 text-amber-600 font-bold text-xs">
-                        ● وضع التجربة السريع (LocalStorage Demo)
+                        ● وضع التجربة السريع
                       </span>
                     )}
                   </div>
                   <p className="text-xs text-[var(--muted)] leading-relaxed">
-                    جميع المنتجات والأسعار والتعديلات والصور تعمل بنسبة 100% فورياً. لربط مشروع
-                    Firebase الخاص بك في أي وقت، ضع المفاتيح في ملف <code className="font-mono bg-[var(--bg)] px-1 py-0.5 rounded">src/firebaseConfig.ts</code>.
+                    قواعد الأمان مفعلة: القراءة متاحة للجميع، والكتابة محصورة بمدير المتجر المعتمد.
                   </p>
                 </section>
 
@@ -810,8 +832,8 @@ export const AdminModal: React.FC<AdminModalProps> = ({
                 <div className="pt-2 text-center">
                   <button
                     type="button"
-                    onClick={adminLogout}
-                    className="touch-btn px-5 py-2 rounded-xl border border-red-500/20 text-red-600 hover:bg-red-500/10 text-xs font-bold transition-colors inline-flex items-center gap-2"
+                    onClick={handleLogout}
+                    className="touch-btn px-5 py-2 rounded-xl border border-red-500/20 text-red-600 hover:bg-red-500/10 text-xs font-bold transition-colors inline-flex items-center gap-2 cursor-pointer"
                   >
                     <LogOut className="w-4 h-4" />
                     تسجيل الخروج من لوحة التحكم
@@ -823,14 +845,18 @@ export const AdminModal: React.FC<AdminModalProps> = ({
 
           {/* Sticky Bottom Bar */}
           <footer className="sticky bottom-0 bg-[var(--card)] border-t border-[var(--line)] px-4 py-2.5 flex items-center justify-between safe-bottom">
-            <span className="text-xs text-[var(--muted)]">
-              {isFirebaseLiveMode() ? 'قاعدة بيانات سحابية نشطة' : 'وضع المعاينة المحلي نشط'}
-            </span>
+            <button
+              onClick={handleLogout}
+              className="touch-btn px-3 py-1 rounded-lg border border-red-500/20 text-red-600 hover:bg-red-500/10 text-xs font-bold transition-colors inline-flex items-center gap-1.5 cursor-pointer"
+            >
+              <LogOut className="w-3.5 h-3.5" />
+              <span>تسجيل الخروج</span>
+            </button>
             <button
               onClick={onClose}
-              className="touch-btn px-5 py-1.5 rounded-xl bg-[var(--ink)] text-[var(--bg)] font-bold text-xs hover:opacity-90 transition-opacity"
+              className="touch-btn px-5 py-1.5 rounded-xl bg-[var(--ink)] text-[var(--bg)] font-bold text-xs hover:opacity-90 transition-opacity cursor-pointer"
             >
-              إغلاق اللوحة والعودة للمتجر
+              إغلاق لوحة التحكم والعودة للمتجر
             </button>
           </footer>
         </div>

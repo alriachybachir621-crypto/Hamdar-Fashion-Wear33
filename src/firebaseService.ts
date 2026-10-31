@@ -2,8 +2,6 @@ import { initializeApp, getApps, getApp } from 'firebase/app';
 import {
   getAuth,
   signInWithEmailAndPassword,
-  signInWithPopup,
-  GoogleAuthProvider,
   signOut,
   updatePassword,
   onAuthStateChanged,
@@ -464,41 +462,27 @@ export function subscribeAuth(callback: (user: User | { uid: string; email: stri
   }
 }
 
+const ADMIN_EMAIL = 'admin@hamdar-site.app';
+
 /**
- * Admin Login with Email + Password
+ * Admin Login with Passcode
+ * Hidden constant email ADMIN_EMAIL = "admin@hamdar-site.app"
  */
-export async function adminLogin(email: string, pass: string): Promise<void> {
+export async function adminLogin(passcode: string): Promise<void> {
   if (isLive && auth) {
     try {
-      await signInWithEmailAndPassword(auth, email.trim(), pass);
-    } catch (err) {
-      // Also try fallback to demo mode password if owner uses initial local passcode
-      const storedPwd = localStorage.getItem(DEMO_PWD_KEY) || 'hamdar2026';
-      if (pass === storedPwd || pass === 'hamdar') {
-        localStorage.setItem(DEMO_ADMIN_KEY, 'true');
-        window.dispatchEvent(new Event('storage'));
-        return;
-      }
+      await signInWithEmailAndPassword(auth, ADMIN_EMAIL, passcode);
+    } catch {
       throw new Error('الرمز غلط');
     }
   } else {
-    const storedPwd = localStorage.getItem(DEMO_PWD_KEY) || 'hamdar2026';
-    if (pass === storedPwd || pass === 'hamdar' || pass === 'admin123') {
+    const storedPwd = localStorage.getItem(DEMO_PWD_KEY);
+    if (storedPwd && passcode === storedPwd) {
       localStorage.setItem(DEMO_ADMIN_KEY, 'true');
       window.dispatchEvent(new Event('storage'));
     } else {
       throw new Error('الرمز غلط');
     }
-  }
-}
-
-/**
- * Admin Login with Google (pre-configured in Firebase)
- */
-export async function adminLoginWithGoogle(): Promise<void> {
-  if (isLive && auth) {
-    const provider = new GoogleAuthProvider();
-    await signInWithPopup(auth, provider);
   }
 }
 

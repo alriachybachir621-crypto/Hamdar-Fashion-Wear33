@@ -8,8 +8,8 @@ service cloud.firestore {
     }
 
     // Helper functions
-    function isSignedIn() {
-      return request.auth != null;
+    function isAdmin() {
+      return request.auth != null && request.auth.token.email == 'admin@hamdar-site.app';
     }
 
     function isValidId(id) {
@@ -32,18 +32,18 @@ service cloud.firestore {
         (!('womenPhone' in data) || (data.womenPhone is string && data.womenPhone.size() <= 30));
     }
 
-    // Products collection: public read, authenticated owner write
+    // Products collection: public read, admin write only
     match /products/{productId} {
       allow read: if true;
-      allow create: if isSignedIn() && isValidId(productId) && isValidProduct(request.resource.data);
-      allow update: if isSignedIn() && isValidId(productId) && isValidProduct(request.resource.data);
-      allow delete: if isSignedIn() && isValidId(productId);
+      allow create: if isAdmin() && isValidId(productId) && isValidProduct(request.resource.data);
+      allow update: if isAdmin() && isValidId(productId) && isValidProduct(request.resource.data);
+      allow delete: if isAdmin() && isValidId(productId);
     }
 
-    // Settings collection: public read, authenticated owner write
+    // Settings collection: public read, admin write only
     match /settings/{settingId} {
       allow read: if true;
-      allow write: if isSignedIn() && isValidId(settingId) && isValidSettings(request.resource.data);
+      allow write: if isAdmin() && isValidId(settingId) && isValidSettings(request.resource.data);
     }
   }
 }
