@@ -4,14 +4,15 @@
   box-sizing: border-box;
 }
 
-html, body, button, input, a {
+html, body, button, input, a, textarea, select {
   touch-action: manipulation;
 }
 
 html, body {
-  overflow-x: hidden;
   width: 100%;
   max-width: 100%;
+  overflow-x: hidden;
+  overflow-x: clip;
   position: relative;
   overscroll-behavior-x: none;
 }

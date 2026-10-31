@@ -473,7 +473,11 @@ export const AdminModal: React.FC<AdminModalProps> = ({
       role="dialog"
       aria-modal="true"
       aria-label="Admin Panel"
-      className="admin-overlay fixed inset-0 z-50 bg-[var(--dark)]/95 backdrop-blur-md flex flex-col w-full max-w-full overflow-y-auto overflow-x-hidden safe-paddings select-none"
+      className="admin-overlay fixed inset-0 z-50 bg-[var(--dark)]/95 backdrop-blur-md flex flex-col w-full max-w-full overflow-y-auto overflow-x-hidden select-none safe-top safe-bottom"
+      style={{
+        touchAction: 'pan-y',
+        WebkitOverflowScrolling: 'touch',
+      }}
       dir="rtl"
     >
       {/* 1. Header Bar: wrapped & touch-friendly for 375px */}
