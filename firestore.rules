@@ -22,7 +22,7 @@ service cloud.firestore {
         data.nameAr is string && data.nameAr.size() > 0 && data.nameAr.size() <= 120 &&
         data.nameEn is string && data.nameEn.size() > 0 && data.nameEn.size() <= 120 &&
         (!('price' in data) || (data.price is string && data.price.size() <= 30)) &&
-        (!('imageUrl' in data) || (data.imageUrl is string && data.imageUrl.size() <= 1000000)) &&
+        (!('imageUrl' in data) || (data.imageUrl is string && data.imageUrl.size() <= 500000)) &&
         (!('createdAt' in data) || (data.createdAt is number));
     }
 

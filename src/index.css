@@ -1,5 +1,9 @@
 @import "tailwindcss";
 
+*, *::before, *::after {
+  box-sizing: border-box;
+}
+
 @layer base {
   :root {
     --bg: #f7f5f2;
@@ -27,6 +31,12 @@
     }
   }
 
+  html, body {
+    overflow-x: hidden;
+    max-width: 100%;
+    width: 100%;
+  }
+
   html {
     scroll-behavior: smooth;
     font-family: var(--font-body);
@@ -38,7 +48,11 @@
     background-color: var(--bg);
     color: var(--ink);
     min-height: 100vh;
-    overflow-x: hidden;
+  }
+
+  /* Prevent auto-zoom on iOS Safari when tapping inputs/textareas */
+  input, textarea, select {
+    font-size: 16px !important;
   }
 
   @media (prefers-reduced-motion: reduce) {

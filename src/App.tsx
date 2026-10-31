@@ -117,7 +117,7 @@ export default function App() {
   const instagramUrl = 'https://www.instagram.com/hamdar_mens_wear';
 
   return (
-    <div className="min-h-screen flex flex-col font-body selection:bg-[var(--red)] selection:text-white">
+    <div className="min-h-screen flex flex-col font-body selection:bg-[var(--red)] selection:text-white max-w-full overflow-x-hidden">
       {/* 1. Optional red announcement banner (from database, hidden when empty) */}
       {settings.banner && settings.banner.trim().length > 0 && (
         <aside

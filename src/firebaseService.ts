@@ -17,12 +17,6 @@ import {
   getDocFromServer,
   getDocs,
 } from 'firebase/firestore';
-import {
-  getStorage,
-  ref as storageRef,
-  uploadBytes,
-  getDownloadURL,
-} from 'firebase/storage';
 import { firebaseConfig, isFirebaseConfigured } from './firebaseConfig';
 import { INITIAL_PRODUCTS, INITIAL_SETTINGS } from './initialData';
 import { Product, SiteSettings, StoreType } from './types';
@@ -72,10 +66,40 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
     path,
   };
   console.error('Firestore Error: ', JSON.stringify(errInfo));
-  throw new Error(JSON.stringify(errInfo));
+  throw error;
 }
 
-// Storage keys for demo fallback mode
+// Timeout helper (20 seconds)
+export function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs = 20000,
+  fallbackMsg = 'انتهت مهلة الاتصال بالخادم (20 ثانية)'
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout>;
+  const timeoutPromise = new Promise<T>((_, reject) => {
+    timer = setTimeout(() => {
+      const err: any = new Error(fallbackMsg);
+      err.code = 'deadline-exceeded';
+      reject(err);
+    }, timeoutMs);
+  });
+
+  return Promise.race([
+    promise.then(
+      (res) => {
+        clearTimeout(timer);
+        return res;
+      },
+      (err) => {
+        clearTimeout(timer);
+        throw err;
+      }
+    ),
+    timeoutPromise,
+  ]);
+}
+
+// LocalStorage keys for demo fallback mode
 const DEMO_PRODUCTS_KEY = 'hamdar_products_v1';
 const DEMO_SETTINGS_KEY = 'hamdar_settings_v1';
 const DEMO_ADMIN_KEY = 'hamdar_demo_admin_logged';
@@ -84,19 +108,17 @@ const DEMO_PWD_KEY = 'hamdar_demo_password';
 let isLive = isFirebaseConfigured();
 let auth: ReturnType<typeof getAuth> | null = null;
 let db: ReturnType<typeof getFirestore> | null = null;
-let storage: ReturnType<typeof getStorage> | null = null;
 
 if (isLive) {
   try {
     const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
     auth = getAuth(app);
-    // CRITICAL: The app will break without specifying firestoreDatabaseId when using named databases
+    // CRITICAL: Must use firestoreDatabaseId when provisioned with named database
     db = firebaseConfig.firestoreDatabaseId
       ? getFirestore(app, firebaseConfig.firestoreDatabaseId)
       : getFirestore(app);
-    storage = getStorage(app);
 
-    // Test connection on boot per Firebase guidelines
+    // Test connection on boot
     (async () => {
       try {
         if (db) {
@@ -115,28 +137,33 @@ if (isLive) {
 }
 
 /**
- * Image compressor utility:
- * Max dimension: 600px
- * Quality: 0.72 JPEG
+ * Client-side Canvas Image Compression:
+ * - Max side: 500px
+ * - JPEG quality: 0.70 default
+ * - Strictly under 150KB (153,600 bytes)
+ * - Returns base64 data URL string directly (no Firebase Storage used)
  */
-export async function compressImage(file: File, maxDim = 600, quality = 0.72): Promise<Blob> {
+export async function compressImageToBase64(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
-    reader.onerror = reject;
+    reader.onerror = () => reject(new Error('تعذر قراءة ملف الصورة'));
     reader.onload = () => {
       const img = new Image();
-      img.onerror = reject;
+      img.onerror = () => reject(new Error('تعذر معالجة الصورة في المتصفح'));
       img.onload = () => {
+        const MAX_DIM = 500;
+        const MAX_BYTES = 150 * 1024; // 150KB
+
         let width = img.width;
         let height = img.height;
 
-        if (width > maxDim || height > maxDim) {
+        if (width > MAX_DIM || height > MAX_DIM) {
           if (width > height) {
-            height = Math.round((height * maxDim) / width);
-            width = maxDim;
+            height = Math.round((height * MAX_DIM) / width);
+            width = MAX_DIM;
           } else {
-            width = Math.round((width * maxDim) / height);
-            height = maxDim;
+            width = Math.round((width * MAX_DIM) / height);
+            height = MAX_DIM;
           }
         }
 
@@ -148,53 +175,42 @@ export async function compressImage(file: File, maxDim = 600, quality = 0.72): P
           return reject(new Error('Canvas context unavailable'));
         }
 
+        // Draw with smoothing for high-quality downsampling
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = 'high';
         ctx.drawImage(img, 0, 0, width, height);
-        canvas.toBlob(
-          (blob) => {
-            if (blob) {
-              resolve(blob);
-            } else {
-              reject(new Error('Canvas to blob compression failed'));
-            }
-          },
-          'image/jpeg',
-          quality
-        );
+
+        // Try at quality 0.7
+        let quality = 0.7;
+        let dataUrl = canvas.toDataURL('image/jpeg', quality);
+
+        // Calculate approximate byte size of base64 string
+        const calcBytes = (url: string) => {
+          const base64Str = url.split(',')[1] || '';
+          return Math.round((base64Str.length * 3) / 4);
+        };
+
+        // If above 150KB, reduce quality progressively
+        let bytes = calcBytes(dataUrl);
+        while (bytes > MAX_BYTES && quality > 0.3) {
+          quality -= 0.1;
+          dataUrl = canvas.toDataURL('image/jpeg', quality);
+          bytes = calcBytes(dataUrl);
+        }
+
+        // If still above 150KB, scale down dimensions
+        if (bytes > MAX_BYTES) {
+          canvas.width = Math.round(width * 0.75);
+          canvas.height = Math.round(height * 0.75);
+          ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+          dataUrl = canvas.toDataURL('image/jpeg', 0.6);
+        }
+
+        resolve(dataUrl);
       };
       img.src = reader.result as string;
     };
     reader.readAsDataURL(file);
-  });
-}
-
-/**
- * Upload image:
- * If live Firebase and storage configured, uploads to Firebase Storage and returns URL.
- * Falls back to compressed data URL.
- */
-export async function uploadProductImage(file: File): Promise<string> {
-  const compressedBlob = await compressImage(file, 600, 0.72);
-
-  if (isLive && storage) {
-    try {
-      const safeName = file.name.replace(/[^a-zA-Z0-9.]/g, '_');
-      const path = `products/${Date.now()}_${safeName}`;
-      const fileRef = storageRef(storage, path);
-      await uploadBytes(fileRef, compressedBlob, {
-        contentType: 'image/jpeg',
-      });
-      return await getDownloadURL(fileRef);
-    } catch (storageErr) {
-      console.warn('Firebase Storage upload failed, falling back to compressed data URL:', storageErr);
-    }
-  }
-
-  // Convert compressed blob to data URL
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onloadend = () => resolve(reader.result as string);
-    reader.onerror = reject;
-    reader.readAsDataURL(compressedBlob);
   });
 }
 
@@ -246,11 +262,9 @@ async function seedFirestoreIfEmpty(firestoreDb: ReturnType<typeof getFirestore>
     const colRef = collection(firestoreDb, 'products');
     const snap = await getDocs(colRef);
     if (snap.empty) {
-      // Seed initial products in batch / sequentially
       for (const prod of INITIAL_PRODUCTS) {
         await setDoc(doc(firestoreDb, 'products', prod.id), prod);
       }
-      // Seed initial settings
       await setDoc(doc(firestoreDb, 'settings', 'site'), INITIAL_SETTINGS);
     }
   } catch (err) {
@@ -270,7 +284,6 @@ export function subscribeProducts(callback: (products: Product[]) => void): () =
       (snapshot) => {
         if (snapshot.empty) {
           callback(INITIAL_PRODUCTS);
-          // Auto-seed in background if owner writes
           seedFirestoreIfEmpty(db!);
         } else {
           const list: Product[] = [];
@@ -291,7 +304,7 @@ export function subscribeProducts(callback: (products: Product[]) => void): () =
         }
       },
       (error) => {
-        handleFirestoreError(error, OperationType.GET, colPath);
+        console.warn('Firestore products listener error, using cache:', error);
         callback(getDemoProducts());
       }
     );
@@ -327,7 +340,7 @@ export function subscribeSettings(callback: (settings: SiteSettings) => void): (
         }
       },
       (error) => {
-        handleFirestoreError(error, OperationType.GET, docPath);
+        console.warn('Firestore settings error, using fallback:', error);
         callback(getDemoSettings());
       }
     );
@@ -342,7 +355,7 @@ export function subscribeSettings(callback: (settings: SiteSettings) => void): (
 }
 
 /**
- * Add a new product
+ * Add a new product (wrapped in 20-second timeout with auth validation)
  */
 export async function addProduct(product: {
   store: StoreType;
@@ -362,9 +375,17 @@ export async function addProduct(product: {
   };
 
   if (isLive && db) {
+    if (!auth?.currentUser) {
+      const err: any = new Error('سجّل الدخول من جديد');
+      err.code = 'auth/not-authenticated';
+      throw err;
+    }
     const path = `products/${newProduct.id}`;
     try {
-      await setDoc(doc(db, 'products', newProduct.id), newProduct);
+      await withTimeout(
+        setDoc(doc(db, 'products', newProduct.id), newProduct),
+        20000
+      );
     } catch (error) {
       handleFirestoreError(error, OperationType.WRITE, path);
     }
@@ -377,16 +398,24 @@ export async function addProduct(product: {
 }
 
 /**
- * Update an existing product
+ * Update an existing product (wrapped in 20-second timeout with auth validation)
  */
 export async function updateProduct(
   id: string,
   updates: Partial<Omit<Product, 'id' | 'createdAt'>>
 ): Promise<void> {
   if (isLive && db) {
+    if (!auth?.currentUser) {
+      const err: any = new Error('سجّل الدخول من جديد');
+      err.code = 'auth/not-authenticated';
+      throw err;
+    }
     const path = `products/${id}`;
     try {
-      await setDoc(doc(db, 'products', id), updates, { merge: true });
+      await withTimeout(
+        setDoc(doc(db, 'products', id), updates, { merge: true }),
+        20000
+      );
     } catch (error) {
       handleFirestoreError(error, OperationType.UPDATE, path);
     }
@@ -402,13 +431,21 @@ export async function updateProduct(
 }
 
 /**
- * Delete a product
+ * Delete a product (wrapped in 20-second timeout with auth validation)
  */
 export async function deleteProduct(id: string): Promise<void> {
   if (isLive && db) {
+    if (!auth?.currentUser) {
+      const err: any = new Error('سجّل الدخول من جديد');
+      err.code = 'auth/not-authenticated';
+      throw err;
+    }
     const path = `products/${id}`;
     try {
-      await deleteDoc(doc(db, 'products', id));
+      await withTimeout(
+        deleteDoc(doc(db, 'products', id)),
+        20000
+      );
     } catch (error) {
       handleFirestoreError(error, OperationType.DELETE, path);
     }
@@ -421,13 +458,21 @@ export async function deleteProduct(id: string): Promise<void> {
 }
 
 /**
- * Update site settings
+ * Update site settings (wrapped in 20-second timeout with auth validation)
  */
 export async function updateSettings(settings: Partial<SiteSettings>): Promise<void> {
   if (isLive && db) {
+    if (!auth?.currentUser) {
+      const err: any = new Error('سجّل الدخول من جديد');
+      err.code = 'auth/not-authenticated';
+      throw err;
+    }
     const path = 'settings/site';
     try {
-      await setDoc(doc(db, 'settings', 'site'), settings, { merge: true });
+      await withTimeout(
+        setDoc(doc(db, 'settings', 'site'), settings, { merge: true }),
+        20000
+      );
     } catch (error) {
       handleFirestoreError(error, OperationType.WRITE, path);
     }
@@ -449,7 +494,7 @@ export function subscribeAuth(callback: (user: User | { uid: string; email: stri
     const checkDemo = () => {
       const isLogged = localStorage.getItem(DEMO_ADMIN_KEY) === 'true';
       if (isLogged) {
-        callback({ uid: 'demo_owner', email: 'owner@hamdarfashion.com' });
+        callback({ uid: 'demo_owner', email: 'admin@hamdar-site.app' });
       } else {
         callback(null);
       }
@@ -466,12 +511,15 @@ const ADMIN_EMAIL = 'admin@hamdar-site.app';
 
 /**
  * Admin Login with Passcode
- * Hidden constant email ADMIN_EMAIL = "admin@hamdar-site.app"
+ * Calls Firebase Auth signInWithEmailAndPassword with hidden constant email
  */
 export async function adminLogin(passcode: string): Promise<void> {
   if (isLive && auth) {
     try {
-      await signInWithEmailAndPassword(auth, ADMIN_EMAIL, passcode);
+      await withTimeout(
+        signInWithEmailAndPassword(auth, ADMIN_EMAIL, passcode),
+        20000
+      );
     } catch {
       throw new Error('الرمز غلط');
     }
@@ -502,11 +550,11 @@ export async function adminLogout(): Promise<void> {
  */
 export async function adminChangePassword(newPass: string): Promise<void> {
   if (newPass.length < 6) {
-    throw new Error('كلمة المرور يجب أن لا تقل عن 6 أحرف');
+    throw new Error('الرمز الجديد يجب أن لا يقل عن 6 أحرف');
   }
 
   if (isLive && auth && auth.currentUser) {
-    await updatePassword(auth.currentUser, newPass);
+    await withTimeout(updatePassword(auth.currentUser, newPass), 20000);
   } else {
     localStorage.setItem(DEMO_PWD_KEY, newPass);
   }
@@ -514,4 +562,8 @@ export async function adminChangePassword(newPass: string): Promise<void> {
 
 export function isFirebaseLiveMode(): boolean {
   return isLive;
+}
+
+export function getCurrentAuthUser(): User | null {
+  return auth?.currentUser || null;
 }
