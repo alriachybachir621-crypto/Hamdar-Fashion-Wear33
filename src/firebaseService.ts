@@ -5,6 +5,9 @@ import {
   signOut,
   onAuthStateChanged,
   User,
+  EmailAuthProvider,
+  reauthenticateWithCredential,
+  updatePassword,
 } from 'firebase/auth';
 import {
   getFirestore,
@@ -550,4 +553,47 @@ export function isFirebaseLiveMode(): boolean {
 
 export function getCurrentAuthUser(): User | null {
   return auth?.currentUser || null;
+}
+
+/**
+ * Change Admin Password
+ * Re-authenticates currentUser with currentPassword and updates to newPassword.
+ * Never stores any password in code, localStorage or Firestore.
+ */
+export async function adminChangePassword(
+  currentPassword: string,
+  newPassword: string
+): Promise<void> {
+  if (isLive && auth) {
+    const user = auth.currentUser;
+    if (!user || !user.email) {
+      const err: any = new Error('سجّل الدخول من جديد');
+      err.code = 'auth/not-authenticated';
+      throw err;
+    }
+
+    // 1. Re-authenticate with current credentials
+    const credential = EmailAuthProvider.credential(ADMIN_EMAIL, currentPassword);
+    await withTimeout(
+      reauthenticateWithCredential(user, credential),
+      20000,
+      'انتهت مهلة التحقق من الرمز الحالي'
+    );
+
+    // 2. Update password
+    await withTimeout(
+      updatePassword(user, newPassword),
+      20000,
+      'انتهت مهلة تحديث الرمز السري'
+    );
+  } else {
+    // Demo fallback mode (offline)
+    const storedPwd = localStorage.getItem(DEMO_PWD_KEY) || 'admin123';
+    if (currentPassword !== storedPwd) {
+      const err: any = new Error('الرمز الحالي غلط');
+      err.code = 'auth/wrong-password';
+      throw err;
+    }
+    localStorage.setItem(DEMO_PWD_KEY, newPassword);
+  }
 }

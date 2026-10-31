@@ -4,7 +4,13 @@
   box-sizing: border-box;
 }
 
-html, body, button, input, a, textarea, select {
+html, body, #root {
+  touch-action: pan-x pan-y;
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
+button, input, a, textarea, select {
   touch-action: manipulation;
 }
 
@@ -15,6 +21,10 @@ html, body {
   overflow-x: clip;
   position: relative;
   overscroll-behavior-x: none;
+}
+
+.admin-overlay, .viewer-overlay, .scrollable-overlay {
+  touch-action: pan-y !important;
 }
 
 body.admin-open {

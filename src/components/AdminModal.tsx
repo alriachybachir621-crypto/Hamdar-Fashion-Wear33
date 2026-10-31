@@ -26,6 +26,7 @@ import {
   ArrowDown,
   Sparkles,
   ShoppingBag,
+  KeyRound,
 } from 'lucide-react';
 import { Product, SiteSettings, StoreType } from '../types';
 import {
@@ -36,6 +37,7 @@ import {
   updateSettings,
   adminLogin,
   adminLogout,
+  adminChangePassword,
   compressImageToBase64,
   isFirebaseLiveMode,
   getCurrentAuthUser,
@@ -76,6 +78,31 @@ function formatErrorMessage(err: any): string {
     return `فشلت العملية (${code}): ${message}`;
   }
   return message || 'تعذر إتمام العملية';
+}
+
+function formatPasswordErrorMessage(err: any): string {
+  if (!err) return 'حدث خطأ غير متوقع';
+  const code = err.code || '';
+  const message = err.message || String(err);
+
+  if (
+    code === 'auth/wrong-password' ||
+    code === 'auth/invalid-credential' ||
+    message.includes('الرمز الحالي غلط') ||
+    message.includes('wrong-password')
+  ) {
+    return 'الرمز الحالي غلط';
+  }
+  if (code === 'auth/too-many-requests' || message.includes('too-many-requests')) {
+    return 'محاولات كثيرة، جرّب بعد قليل';
+  }
+  if (code === 'auth/not-authenticated' || message.includes('سجّل الدخول')) {
+    return 'سجّل الدخول من جديد';
+  }
+  if (code) {
+    return `فشلت العملية (${code})`;
+  }
+  return message || 'تعذر تغيير الرمز';
 }
 
 export const AdminModal: React.FC<AdminModalProps> = ({
@@ -136,6 +163,17 @@ export const AdminModal: React.FC<AdminModalProps> = ({
   const [settingsError, setSettingsError] = useState('');
   const [settingsSuccess, setSettingsSuccess] = useState(false);
   const heroFileInputRef = useRef<HTMLInputElement>(null);
+
+  // Change password form state
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [showCurrentPwd, setShowCurrentPwd] = useState(false);
+  const [showNewPwd, setShowNewPwd] = useState(false);
+  const [showConfirmPwd, setShowConfirmPwd] = useState(false);
+  const [isChangingPassword, setIsChangingPassword] = useState(false);
+  const [passwordError, setPasswordError] = useState('');
+  const [passwordSuccess, setPasswordSuccess] = useState(false);
 
   // Lock body scroll whenever admin modal is open to eliminate iOS bounce
   useEffect(() => {
@@ -454,6 +492,52 @@ export const AdminModal: React.FC<AdminModalProps> = ({
       setSettingsError(formatErrorMessage(err));
     } finally {
       setIsSavingSettings(false);
+    }
+  };
+
+  // Handle Admin Password Change
+  const handleChangePassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setPasswordError('');
+    setPasswordSuccess(false);
+
+    if (!user && isFirebaseLiveMode()) {
+      setPasswordError('سجّل الدخول من جديد');
+      return;
+    }
+
+    if (!currentPassword) {
+      setPasswordError('يرجى إدخال الرمز الحالي');
+      return;
+    }
+
+    if (newPassword.length < 6) {
+      setPasswordError('الرمز الجديد يجب أن يتكون من 6 أحرف على الأقل (يُفضل 8 أحرف وأكثر)');
+      return;
+    }
+
+    if (newPassword === currentPassword) {
+      setPasswordError('الرمز الجديد يجب أن يختلف عن الرمز الحالي');
+      return;
+    }
+
+    if (newPassword !== confirmPassword) {
+      setPasswordError('تأكيد الرمز غير متطابق مع الرمز الجديد');
+      return;
+    }
+
+    setIsChangingPassword(true);
+    try {
+      await adminChangePassword(currentPassword, newPassword);
+      setPasswordSuccess(true);
+      setCurrentPassword('');
+      setNewPassword('');
+      setConfirmPassword('');
+      setTimeout(() => setPasswordSuccess(false), 3500);
+    } catch (err: any) {
+      setPasswordError(formatPasswordErrorMessage(err));
+    } finally {
+      setIsChangingPassword(false);
     }
   };
 
@@ -963,147 +1047,291 @@ export const AdminModal: React.FC<AdminModalProps> = ({
             )}
 
             {/* TAB CONTENT: SETTINGS */}
+            {/* TAB CONTENT: SETTINGS */}
             {activeTab === 'settings' && (
-              <form onSubmit={handleSaveSettings} className="space-y-4">
-                <div className="bg-[var(--card)] border border-[var(--line)] rounded-2xl p-4 sm:p-5 space-y-4 shadow-xl">
-                  {/* Announcement Banner */}
-                  <div>
-                    <label className="block text-xs font-bold text-[var(--ink)] mb-1.5 flex items-center gap-1.5">
-                      <Megaphone className="w-4 h-4 text-[var(--red)]" />
-                      <span>شريط الإعلانات العلوي (فارغ = مخفي)</span>
-                    </label>
-                    <input
-                      type="text"
-                      value={bannerText}
-                      onChange={(e) => setBannerText(e.target.value)}
-                      placeholder="مثال: خصم 20% على جميع البدلات الرجالية بمناسبة الموسم"
-                      className="w-full h-11 px-3 rounded-xl border border-[var(--line)] bg-[var(--bg)] text-[var(--ink)] text-base focus:border-[var(--red)] focus:outline-none"
-                    />
-                    <p className="text-[10px] text-[var(--muted)] mt-1">
-                      يظهر كشريط أحمر أنيق في أعلى الموقع لجذب انتباه الزوار.
-                    </p>
-                  </div>
+              <div className="space-y-6">
+                {/* 1. General Site Settings */}
+                <form onSubmit={handleSaveSettings} className="space-y-4">
+                  <div className="bg-[var(--card)] border border-[var(--line)] rounded-2xl p-4 sm:p-5 space-y-4 shadow-xl">
+                    {/* Announcement Banner */}
+                    <div>
+                      <label className="block text-xs font-bold text-[var(--ink)] mb-1.5 flex items-center gap-1.5">
+                        <Megaphone className="w-4 h-4 text-[var(--red)]" />
+                        <span>شريط الإعلانات العلوي (فارغ = مخفي)</span>
+                      </label>
+                      <input
+                        type="text"
+                        value={bannerText}
+                        onChange={(e) => setBannerText(e.target.value)}
+                        placeholder="مثال: خصم 20% على جميع البدلات الرجالية بمناسبة الموسم"
+                        className="w-full h-11 px-3 rounded-xl border border-[var(--line)] bg-[var(--bg)] text-[var(--ink)] text-base focus:border-[var(--red)] focus:outline-none"
+                      />
+                      <p className="text-[10px] text-[var(--muted)] mt-1">
+                        يظهر كشريط أحمر أنيق في أعلى الموقع لجذب انتباه الزوار.
+                      </p>
+                    </div>
 
-                  {/* Hero Background Image */}
-                  <div>
-                    <label className="block text-xs font-bold text-[var(--ink)] mb-2 flex items-center gap-1.5">
-                      <Sparkles className="w-4 h-4 text-[var(--gold)]" />
-                      <span>صورة خلفية الواجهة الرئيسية (Hero)</span>
-                    </label>
-                    <div className="flex items-center gap-3">
-                      <div className="w-24 h-16 rounded-xl border-2 border-dashed border-[var(--line)] overflow-hidden bg-[var(--bg)] flex items-center justify-center relative shrink-0">
-                        {isCompressingHero ? (
-                          <Loader2 className="w-6 h-6 animate-spin text-[var(--muted)]" />
-                        ) : heroImageBase64 ? (
-                          <img
-                            src={heroImageBase64}
-                            alt="Hero Preview"
-                            className="w-full h-full object-cover"
+                    {/* Hero Background Image */}
+                    <div>
+                      <label className="block text-xs font-bold text-[var(--ink)] mb-2 flex items-center gap-1.5">
+                        <Sparkles className="w-4 h-4 text-[var(--gold)]" />
+                        <span>صورة خلفية الواجهة الرئيسية (Hero)</span>
+                      </label>
+                      <div className="flex items-center gap-3">
+                        <div className="w-24 h-16 rounded-xl border-2 border-dashed border-[var(--line)] overflow-hidden bg-[var(--bg)] flex items-center justify-center relative shrink-0">
+                          {isCompressingHero ? (
+                            <Loader2 className="w-6 h-6 animate-spin text-[var(--muted)]" />
+                          ) : heroImageBase64 ? (
+                            <img
+                              src={heroImageBase64}
+                              alt="Hero Preview"
+                              className="w-full h-full object-cover"
+                            />
+                          ) : (
+                            <span className="text-[10px] text-[var(--muted)]">بدون خلفية</span>
+                          )}
+                        </div>
+
+                        <div className="space-y-1.5 flex-1 min-w-0">
+                          <input
+                            type="file"
+                            ref={heroFileInputRef}
+                            accept="image/*"
+                            onChange={handleHeroImageChange}
+                            className="hidden"
+                            id="hero-photo-input"
                           />
-                        ) : (
-                          <span className="text-[10px] text-[var(--muted)]">بدون خلفية</span>
-                        )}
-                      </div>
-
-                      <div className="space-y-1.5 flex-1 min-w-0">
-                        <input
-                          type="file"
-                          ref={heroFileInputRef}
-                          accept="image/*"
-                          onChange={handleHeroImageChange}
-                          className="hidden"
-                          id="hero-photo-input"
-                        />
-                        <label
-                          htmlFor="hero-photo-input"
-                          className="touch-btn inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-[var(--bg)] border border-[var(--line)] hover:border-[var(--muted)] text-xs font-bold text-[var(--ink)] cursor-pointer"
-                        >
-                          <Upload className="w-3.5 h-3.5" />
-                          <span>تغيير صورة الواجهة</span>
-                        </label>
-
-                        {heroImageBase64 && (
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setHeroImageBase64('');
-                              if (heroFileInputRef.current) heroFileInputRef.current.value = '';
-                            }}
-                            className="block text-[11px] text-red-500 hover:underline cursor-pointer"
+                          <label
+                            htmlFor="hero-photo-input"
+                            className="touch-btn inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-[var(--bg)] border border-[var(--line)] hover:border-[var(--muted)] text-xs font-bold text-[var(--ink)] cursor-pointer"
                           >
-                            حذف صورة الواجهة واستخدام الخلفية الداكنة
-                          </button>
-                        )}
+                            <Upload className="w-3.5 h-3.5" />
+                            <span>تغيير صورة الواجهة</span>
+                          </label>
+
+                          {heroImageBase64 && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setHeroImageBase64('');
+                                if (heroFileInputRef.current) heroFileInputRef.current.value = '';
+                              }}
+                              className="block text-[11px] text-red-500 hover:underline cursor-pointer"
+                            >
+                              حذف صورة الواجهة واستخدام الخلفية الداكنة
+                            </button>
+                          )}
+                        </div>
                       </div>
                     </div>
-                  </div>
 
-                  {/* Phone Numbers */}
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2 border-t border-[var(--line)]">
-                    <div>
-                      <label className="block text-xs font-bold text-[var(--ink)] mb-1 flex items-center gap-1.5">
-                        <Phone className="w-3.5 h-3.5 text-[var(--red)]" />
-                        <span>رقم هاتف / واتساب (رجالي)</span>
-                      </label>
-                      <input
-                        type="text"
-                        value={menPhoneVal}
-                        onChange={(e) => setMenPhoneVal(e.target.value)}
-                        placeholder="76 320 279"
-                        dir="ltr"
-                        className="w-full h-11 px-3 rounded-xl border border-[var(--line)] bg-[var(--bg)] text-[var(--ink)] text-base font-bold focus:border-[var(--red)] focus:outline-none"
-                      />
+                    {/* Phone Numbers */}
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2 border-t border-[var(--line)]">
+                      <div>
+                        <label className="block text-xs font-bold text-[var(--ink)] mb-1 flex items-center gap-1.5">
+                          <Phone className="w-3.5 h-3.5 text-[var(--red)]" />
+                          <span>رقم هاتف / واتساب (رجالي)</span>
+                        </label>
+                        <input
+                          type="text"
+                          value={menPhoneVal}
+                          onChange={(e) => setMenPhoneVal(e.target.value)}
+                          placeholder="76 320 279"
+                          dir="ltr"
+                          className="w-full h-11 px-3 rounded-xl border border-[var(--line)] bg-[var(--bg)] text-[var(--ink)] text-base font-bold focus:border-[var(--red)] focus:outline-none"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-bold text-[var(--ink)] mb-1 flex items-center gap-1.5">
+                          <Phone className="w-3.5 h-3.5 text-[var(--gold)]" />
+                          <span>رقم هاتف / واتساب (نسائي)</span>
+                        </label>
+                        <input
+                          type="text"
+                          value={womenPhoneVal}
+                          onChange={(e) => setWomenPhoneVal(e.target.value)}
+                          placeholder="81 612 154"
+                          dir="ltr"
+                          className="w-full h-11 px-3 rounded-xl border border-[var(--line)] bg-[var(--bg)] text-[var(--ink)] text-base font-bold focus:border-[var(--red)] focus:outline-none"
+                        />
+                      </div>
                     </div>
 
-                    <div>
-                      <label className="block text-xs font-bold text-[var(--ink)] mb-1 flex items-center gap-1.5">
-                        <Phone className="w-3.5 h-3.5 text-[var(--gold)]" />
-                        <span>رقم هاتف / واتساب (نسائي)</span>
-                      </label>
-                      <input
-                        type="text"
-                        value={womenPhoneVal}
-                        onChange={(e) => setWomenPhoneVal(e.target.value)}
-                        placeholder="81 612 154"
-                        dir="ltr"
-                        className="w-full h-11 px-3 rounded-xl border border-[var(--line)] bg-[var(--bg)] text-[var(--ink)] text-base font-bold focus:border-[var(--red)] focus:outline-none"
-                      />
-                    </div>
-                  </div>
-
-                  {/* Feedback */}
-                  {settingsError && (
-                    <div className="p-3 rounded-xl bg-red-500/10 border border-red-500/20 text-red-500 text-xs font-bold">
-                      {settingsError}
-                    </div>
-                  )}
-
-                  {settingsSuccess && (
-                    <div className="p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-500 text-xs font-bold flex items-center gap-1.5">
-                      <CheckCircle2 className="w-4 h-4" />
-                      <span>تم الحفظ ✓</span>
-                    </div>
-                  )}
-
-                  <button
-                    type="submit"
-                    disabled={isSavingSettings || isCompressingHero}
-                    className="touch-btn w-full h-12 rounded-xl bg-[var(--red)] hover:bg-[#a31117] text-white font-bold text-base transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50 shadow-md"
-                  >
-                    {isSavingSettings ? (
-                      <>
-                        <Loader2 className="w-4 h-4 animate-spin" />
-                        <span>جاري حفظ الإعدادات...</span>
-                      </>
-                    ) : (
-                      <>
-                        <Save className="w-4 h-4" />
-                        <span>حفظ الإعدادات</span>
-                      </>
+                    {/* Feedback */}
+                    {settingsError && (
+                      <div className="p-3 rounded-xl bg-red-500/10 border border-red-500/20 text-red-500 text-xs font-bold">
+                        {settingsError}
+                      </div>
                     )}
-                  </button>
-                </div>
-              </form>
+
+                    {settingsSuccess && (
+                      <div className="p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-500 text-xs font-bold flex items-center gap-1.5">
+                        <CheckCircle2 className="w-4 h-4" />
+                        <span>تم الحفظ ✓</span>
+                      </div>
+                    )}
+
+                    <button
+                      type="submit"
+                      disabled={isSavingSettings || isCompressingHero}
+                      className="touch-btn w-full h-12 rounded-xl bg-[var(--red)] hover:bg-[#a31117] text-white font-bold text-base transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50 shadow-md"
+                    >
+                      {isSavingSettings ? (
+                        <>
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                          <span>جاري حفظ الإعدادات...</span>
+                        </>
+                      ) : (
+                        <>
+                          <Save className="w-4 h-4" />
+                          <span>حفظ الإعدادات</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+                </form>
+
+                {/* 2. Change Password Section */}
+                <form onSubmit={handleChangePassword} className="space-y-4">
+                  <div className="bg-[var(--card)] border border-[var(--line)] rounded-2xl p-4 sm:p-5 space-y-4 shadow-xl">
+                    <div className="border-b border-[var(--line)] pb-3">
+                      <h3 className="text-base font-bold text-[var(--ink)] flex items-center gap-2">
+                        <KeyRound className="w-4 h-4 text-[var(--gold)]" />
+                        <span>تغيير الرمز السري</span>
+                      </h3>
+                      <p className="text-[11px] text-[var(--muted)] mt-1">
+                        تحديث الرمز السري المستخدم للدخول إلى لوحة التحكم
+                      </p>
+                    </div>
+
+                    {/* Field 1: Current Password */}
+                    <div>
+                      <label className="block text-xs font-bold text-[var(--ink)] mb-1.5">
+                        الرمز الحالي <span className="text-[var(--red)]">*</span>
+                      </label>
+                      <div className="relative">
+                        <input
+                          type={showCurrentPwd ? 'text' : 'password'}
+                          required
+                          value={currentPassword}
+                          onChange={(e) => {
+                            setCurrentPassword(e.target.value);
+                            if (passwordError) setPasswordError('');
+                          }}
+                          placeholder="••••••••"
+                          dir="ltr"
+                          className="w-full h-11 px-3 pe-10 rounded-xl border border-[var(--line)] bg-[var(--bg)] text-[var(--ink)] font-mono text-base focus:border-[var(--red)] focus:outline-none"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setShowCurrentPwd(!showCurrentPwd)}
+                          className="absolute inset-y-0 end-0 px-3 flex items-center text-[var(--muted)] hover:text-[var(--ink)] cursor-pointer"
+                          tabIndex={-1}
+                          aria-label="إظهار أو إخفاء الرمز الحالي"
+                        >
+                          {showCurrentPwd ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Field 2: New Password */}
+                    <div>
+                      <label className="block text-xs font-bold text-[var(--ink)] mb-1.5">
+                        الرمز الجديد <span className="text-[var(--red)]">*</span>
+                      </label>
+                      <div className="relative">
+                        <input
+                          type={showNewPwd ? 'text' : 'password'}
+                          required
+                          value={newPassword}
+                          onChange={(e) => {
+                            setNewPassword(e.target.value);
+                            if (passwordError) setPasswordError('');
+                          }}
+                          placeholder="••••••••"
+                          dir="ltr"
+                          className="w-full h-11 px-3 pe-10 rounded-xl border border-[var(--line)] bg-[var(--bg)] text-[var(--ink)] font-mono text-base focus:border-[var(--red)] focus:outline-none"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setShowNewPwd(!showNewPwd)}
+                          className="absolute inset-y-0 end-0 px-3 flex items-center text-[var(--muted)] hover:text-[var(--ink)] cursor-pointer"
+                          tabIndex={-1}
+                          aria-label="إظهار أو إخفاء الرمز الجديد"
+                        >
+                          {showNewPwd ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                        </button>
+                      </div>
+                      <p className="text-[10px] text-[var(--muted)] mt-1">
+                        يجب ألا يقل عن 6 أحرف (يُفضل 8 أحرف وأكثر)، ويختلف عن الرمز الحالي.
+                      </p>
+                    </div>
+
+                    {/* Field 3: Confirm New Password */}
+                    <div>
+                      <label className="block text-xs font-bold text-[var(--ink)] mb-1.5">
+                        تأكيد الرمز الجديد <span className="text-[var(--red)]">*</span>
+                      </label>
+                      <div className="relative">
+                        <input
+                          type={showConfirmPwd ? 'text' : 'password'}
+                          required
+                          value={confirmPassword}
+                          onChange={(e) => {
+                            setConfirmPassword(e.target.value);
+                            if (passwordError) setPasswordError('');
+                          }}
+                          placeholder="••••••••"
+                          dir="ltr"
+                          className="w-full h-11 px-3 pe-10 rounded-xl border border-[var(--line)] bg-[var(--bg)] text-[var(--ink)] font-mono text-base focus:border-[var(--red)] focus:outline-none"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setShowConfirmPwd(!showConfirmPwd)}
+                          className="absolute inset-y-0 end-0 px-3 flex items-center text-[var(--muted)] hover:text-[var(--ink)] cursor-pointer"
+                          tabIndex={-1}
+                          aria-label="إظهار أو إخفاء تأكيد الرمز الجديد"
+                        >
+                          {showConfirmPwd ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Error & Success Feedback */}
+                    {passwordError && (
+                      <div className="p-3 rounded-xl bg-red-500/10 border border-red-500/20 text-red-500 text-xs font-bold animate-in fade-in">
+                        {passwordError}
+                      </div>
+                    )}
+
+                    {passwordSuccess && (
+                      <div className="p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-500 text-xs font-bold flex items-center gap-1.5 animate-in fade-in">
+                        <CheckCircle2 className="w-4 h-4" />
+                        <span>تم تغيير الرمز ✓</span>
+                      </div>
+                    )}
+
+                    <button
+                      type="submit"
+                      disabled={isChangingPassword}
+                      className="touch-btn w-full h-12 rounded-xl bg-[var(--gold)] hover:bg-[#9d7725] text-black font-bold text-base transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50 shadow-md"
+                    >
+                      {isChangingPassword ? (
+                        <>
+                          <Loader2 className="w-4 h-4 animate-spin text-black" />
+                          <span>جاري تغيير الرمز...</span>
+                        </>
+                      ) : (
+                        <>
+                          <KeyRound className="w-4 h-4" />
+                          <span>تغيير الرمز</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+                </form>
+              </div>
             )}
           </div>
         )}
