@@ -360,15 +360,17 @@ export function subscribeSettings(callback: (settings: SiteSettings) => void): (
 export async function addProduct(product: {
   store: StoreType;
   nameAr: string;
-  nameEn: string;
+  nameEn?: string;
   price?: string;
   imageUrl?: string;
-}): Promise<void> {
+}): Promise<Product> {
+  const finalNameAr = product.nameAr.trim();
+  const finalNameEn = (product.nameEn && product.nameEn.trim()) || finalNameAr;
   const newProduct: Product = {
     id: 'prod_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7),
     store: product.store,
-    nameAr: product.nameAr.trim(),
-    nameEn: product.nameEn.trim(),
+    nameAr: finalNameAr,
+    nameEn: finalNameEn,
     price: product.price?.trim() || '',
     imageUrl: product.imageUrl || '',
     createdAt: Date.now(),
@@ -389,12 +391,15 @@ export async function addProduct(product: {
     } catch (error) {
       handleFirestoreError(error, OperationType.WRITE, path);
     }
-  } else {
-    const list = getDemoProducts();
-    const updated = [newProduct, ...list];
-    localStorage.setItem(DEMO_PRODUCTS_KEY, JSON.stringify(updated));
-    notifyProductListeners();
   }
+
+  // Update local cache so it appears immediately on public page and admin list
+  const list = getDemoProducts();
+  const updated = [newProduct, ...list.filter((p) => p.id !== newProduct.id)];
+  localStorage.setItem(DEMO_PRODUCTS_KEY, JSON.stringify(updated));
+  notifyProductListeners();
+
+  return newProduct;
 }
 
 /**
@@ -419,14 +424,14 @@ export async function updateProduct(
     } catch (error) {
       handleFirestoreError(error, OperationType.UPDATE, path);
     }
-  } else {
-    const list = getDemoProducts();
-    const index = list.findIndex((p) => p.id === id);
-    if (index !== -1) {
-      list[index] = { ...list[index], ...updates };
-      localStorage.setItem(DEMO_PRODUCTS_KEY, JSON.stringify(list));
-      notifyProductListeners();
-    }
+  }
+
+  const list = getDemoProducts();
+  const index = list.findIndex((p) => p.id === id);
+  if (index !== -1) {
+    list[index] = { ...list[index], ...updates };
+    localStorage.setItem(DEMO_PRODUCTS_KEY, JSON.stringify(list));
+    notifyProductListeners();
   }
 }
 

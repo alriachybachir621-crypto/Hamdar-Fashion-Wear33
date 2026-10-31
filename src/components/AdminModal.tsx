@@ -16,6 +16,7 @@ import {
   Eye,
   EyeOff,
   AlertTriangle,
+  Edit3,
 } from 'lucide-react';
 import { Product, SiteSettings, StoreType } from '../types';
 import {
@@ -45,22 +46,22 @@ const ATTEMPTS_KEY = 'hamdar_admin_failed_attempts';
 function formatErrorMessage(err: any): string {
   if (!err) return 'حدث خطأ غير متوقع';
   const code = err.code || '';
-  const message = err.message || '';
+  const message = err.message || String(err);
 
   if (code === 'auth/not-authenticated' || message.includes('سجّل الدخول')) {
-    return 'سجّل الدخول من جديد';
+    return 'سجّل الدخول من جديد (auth/not-authenticated)';
   }
   if (code === 'permission-denied' || message.includes('permission-denied')) {
-    return 'ليس لديك صلاحية الكتابة (permission-denied) - سجّل الدخول من جديد';
+    return 'ليس لديك صلاحية الكتابة (permission-denied). تأكد من تسجيل الدخول كمسؤول.';
   }
   if (code === 'deadline-exceeded' || message.includes('مهلة')) {
-    return 'انتهت مهلة الاتصال بالخادم (20 ثانية) - تحقق من اتصال الإنترنت';
+    return 'انتهت مهلة الاتصال بالخادم (deadline-exceeded). تحقق من اتصال الإنترنت.';
   }
   if (code === 'unavailable') {
-    return 'خدمة قاعدة البيانات غير متوفرة حالياً (unavailable)';
+    return 'الخدمة غير متوفرة حالياً (unavailable).';
   }
   if (code) {
-    return `فشلت العملية (${code})`;
+    return `فشلت العملية (${code}): ${message}`;
   }
   return message || 'تعذر إتمام العملية';
 }
@@ -93,7 +94,18 @@ export const AdminModal: React.FC<AdminModalProps> = ({
   const [isAdding, setIsAdding] = useState(false);
   const [addError, setAddError] = useState('');
   const [addSuccess, setAddSuccess] = useState(false);
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  const addFileInputRef = useRef<HTMLInputElement>(null);
+
+  // Edit product modal state
+  const [editingProduct, setEditingProduct] = useState<Product | null>(null);
+  const [editNameAr, setEditNameAr] = useState('');
+  const [editNameEn, setEditNameEn] = useState('');
+  const [editPrice, setEditPrice] = useState('');
+  const [editImageUrl, setEditImageUrl] = useState('');
+  const [isUpdating, setIsUpdating] = useState(false);
+  const [editError, setEditError] = useState('');
+  const [editSuccess, setEditSuccess] = useState(false);
+  const editFileInputRef = useRef<HTMLInputElement>(null);
 
   // Settings form
   const [bannerText, setBannerText] = useState(settings.banner);
@@ -105,7 +117,7 @@ export const AdminModal: React.FC<AdminModalProps> = ({
   const [settingsSuccess, setSettingsSuccess] = useState(false);
   const [passwordStatus, setPasswordStatus] = useState('');
 
-  // Lockout ticker
+  // Lockout timer ticker
   useEffect(() => {
     const checkLockout = () => {
       const stored = localStorage.getItem(LOCKOUT_KEY);
@@ -177,9 +189,10 @@ export const AdminModal: React.FC<AdminModalProps> = ({
     await adminLogout();
     setPasscode('');
     setAuthError('');
+    setEditingProduct(null);
   };
 
-  const handleImageSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleAddImageSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
       const file = e.target.files[0];
       setNewImageFile(file);
@@ -193,12 +206,12 @@ export const AdminModal: React.FC<AdminModalProps> = ({
     setAddError('');
     setAddSuccess(false);
 
-    if (!newNameAr.trim() || !newNameEn.trim()) {
-      setAddError('يرجى كتابة اسم المنتج باللغتين العربية والإنجليزية');
+    // Only Arabic name is required
+    if (!newNameAr.trim()) {
+      setAddError('يرجى إدخال اسم المنتج بالعربية');
       return;
     }
 
-    // Check Firebase Auth currentUser before saving
     if (isFirebaseLiveMode() && !getCurrentAuthUser()) {
       setAddError('سجّل الدخول من جديد');
       return;
@@ -215,7 +228,7 @@ export const AdminModal: React.FC<AdminModalProps> = ({
       await addProduct({
         store: newStore,
         nameAr: newNameAr,
-        nameEn: newNameEn,
+        nameEn: newNameEn.trim() || newNameAr.trim(),
         price: newPrice,
         imageUrl: base64Url,
       });
@@ -226,7 +239,7 @@ export const AdminModal: React.FC<AdminModalProps> = ({
       setNewPrice('');
       setNewImageFile(null);
       setImagePreview('');
-      if (fileInputRef.current) fileInputRef.current.value = '';
+      if (addFileInputRef.current) addFileInputRef.current.value = '';
 
       setAddSuccess(true);
       setTimeout(() => setAddSuccess(false), 2000);
@@ -238,6 +251,67 @@ export const AdminModal: React.FC<AdminModalProps> = ({
     }
   };
 
+  // Open Edit Product Modal for tapped row
+  const openEditModal = (prod: Product) => {
+    setEditingProduct(prod);
+    setEditNameAr(prod.nameAr);
+    setEditNameEn(prod.nameEn || prod.nameAr);
+    setEditPrice(prod.price || '');
+    setEditImageUrl(prod.imageUrl || '');
+    setEditError('');
+    setEditSuccess(false);
+  };
+
+  const handleEditImageSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files[0]) {
+      try {
+        const file = e.target.files[0];
+        const compressedBase64 = await compressImageToBase64(file);
+        setEditImageUrl(compressedBase64);
+      } catch (err: any) {
+        setEditError('تعذر معالجة الصورة: ' + err.message);
+      }
+    }
+  };
+
+  const handleSaveEdit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingProduct) return;
+    setEditError('');
+    setEditSuccess(false);
+
+    if (!editNameAr.trim()) {
+      setEditError('يرجى إدخال اسم المنتج بالعربية');
+      return;
+    }
+
+    if (isFirebaseLiveMode() && !getCurrentAuthUser()) {
+      setEditError('سجّل الدخول من جديد');
+      return;
+    }
+
+    setIsUpdating(true);
+    try {
+      await updateProduct(editingProduct.id, {
+        nameAr: editNameAr.trim(),
+        nameEn: editNameEn.trim() || editNameAr.trim(),
+        price: editPrice.trim(),
+        imageUrl: editImageUrl,
+      });
+
+      setEditSuccess(true);
+      setTimeout(() => {
+        setEditSuccess(false);
+        setEditingProduct(null);
+      }, 1500);
+    } catch (err: any) {
+      console.error('Error updating product:', err);
+      setEditError(formatErrorMessage(err));
+    } finally {
+      setIsUpdating(false);
+    }
+  };
+
   const handleDeleteProduct = async (id: string) => {
     if (window.confirm('حذف هذا المنتج؟')) {
       if (isFirebaseLiveMode() && !getCurrentAuthUser()) {
@@ -246,25 +320,12 @@ export const AdminModal: React.FC<AdminModalProps> = ({
       }
       try {
         await deleteProduct(id);
+        if (editingProduct?.id === id) {
+          setEditingProduct(null);
+        }
       } catch (err: any) {
         alert(formatErrorMessage(err));
       }
-    }
-  };
-
-  const handleInlineUpdate = async (
-    id: string,
-    field: 'nameAr' | 'nameEn' | 'price',
-    value: string
-  ) => {
-    if (isFirebaseLiveMode() && !getCurrentAuthUser()) {
-      alert('سجّل الدخول من جديد');
-      return;
-    }
-    try {
-      await updateProduct(id, { [field]: value });
-    } catch (err: any) {
-      alert(formatErrorMessage(err));
     }
   };
 
@@ -318,11 +379,22 @@ export const AdminModal: React.FC<AdminModalProps> = ({
   return (
     <div
       dir="rtl"
-      className="fixed inset-0 z-50 flex flex-col bg-[var(--bg)] text-[var(--ink)] overflow-hidden font-body animate-in fade-in duration-200 max-w-full w-full"
+      className="admin-overlay-container z-50 flex flex-col bg-[var(--bg)] text-[var(--ink)] font-body animate-in fade-in duration-200"
+      style={{
+        position: 'fixed',
+        inset: 0,
+        width: '100%',
+        maxWidth: '100vw',
+        overflowX: 'hidden',
+        overflowY: 'auto',
+        overscrollBehaviorX: 'none',
+        touchAction: 'pan-y',
+        WebkitOverflowScrolling: 'touch',
+      }}
     >
-      {/* Top Header - buttons wrap and space cleanly on small devices */}
-      <header className="flex flex-wrap items-center justify-between px-3 sm:px-4 py-2.5 bg-[var(--card)] border-b border-[var(--line)] safe-top gap-2 max-w-full shrink-0">
-        <div className="flex items-center gap-2.5 min-w-0">
+      {/* Top Header - flex-wrap and gap: 8px to prevent overflow on iPhone Safari */}
+      <header className="flex flex-wrap items-center justify-between px-3 py-2.5 bg-[var(--card)] border-b border-[var(--line)] safe-top gap-2 w-full max-w-full shrink-0">
+        <div className="flex items-center gap-2 min-w-0">
           <div className="w-8 h-8 rounded-full bg-[var(--red)]/10 text-[var(--red)] flex items-center justify-center font-bold shrink-0">
             H
           </div>
@@ -332,12 +404,12 @@ export const AdminModal: React.FC<AdminModalProps> = ({
           </div>
         </div>
 
-        {/* Global Action Buttons (flex-wrap: wrap, gap: 8px) */}
+        {/* Header Action Buttons */}
         <div className="flex flex-wrap items-center gap-2">
           {user && (
             <button
               onClick={handleLogout}
-              className="touch-btn px-2.5 sm:px-3 py-1.5 rounded-lg border border-red-500/20 text-red-600 hover:bg-red-500/10 text-xs font-bold transition-colors flex items-center gap-1 cursor-pointer shrink-0"
+              className="touch-btn px-2.5 py-1.5 rounded-lg border border-red-500/20 text-red-600 hover:bg-red-500/10 text-xs font-bold transition-colors flex items-center gap-1 cursor-pointer shrink-0"
               aria-label="تسجيل الخروج"
             >
               <LogOut className="w-3.5 h-3.5" />
@@ -359,7 +431,7 @@ export const AdminModal: React.FC<AdminModalProps> = ({
       {/* Main Content Area */}
       {!user ? (
         // Single Passcode Login View
-        <div className="flex-1 overflow-y-auto p-4 flex items-center justify-center max-w-full">
+        <div className="flex-1 overflow-y-auto p-4 flex items-center justify-center w-full max-w-full">
           <div className="w-full max-w-sm bg-[var(--card)] border border-[var(--line)] rounded-2xl p-5 sm:p-7 shadow-sm">
             <div className="text-center mb-6">
               <div className="inline-flex items-center justify-center w-12 h-12 rounded-2xl bg-[var(--red)]/10 text-[var(--red)] mb-2.5">
@@ -440,9 +512,9 @@ export const AdminModal: React.FC<AdminModalProps> = ({
         </div>
       ) : (
         // Authenticated Admin Dashboard
-        <div className="flex-1 flex flex-col overflow-hidden max-w-full">
-          {/* Navigation Tabs (each tab is flex: 1 with min-width: 0 so nothing is cut off on 375px) */}
-          <div className="flex w-full border-b border-[var(--line)] bg-[var(--card)] p-1 gap-1 shrink-0">
+        <div className="flex-1 flex flex-col overflow-hidden w-full max-w-full">
+          {/* Navigation Tabs (3 equal tabs, flex: 1, min-width: 0, fits 375px screens) */}
+          <div className="flex w-full max-w-full border-b border-[var(--line)] bg-[var(--card)] p-1 gap-1 shrink-0">
             <button
               onClick={() => setActiveTab('men')}
               className={`touch-btn flex-1 min-w-0 py-2 px-1 text-center font-bold text-xs sm:text-sm rounded-lg transition-all cursor-pointer truncate ${
@@ -478,29 +550,29 @@ export const AdminModal: React.FC<AdminModalProps> = ({
           </div>
 
           {/* Scrollable Content */}
-          <div className="flex-1 overflow-y-auto p-3 sm:p-5 pb-24 max-w-full">
+          <div className="flex-1 overflow-y-auto p-3 sm:p-5 pb-24 w-full max-w-full">
             {activeTab === 'men' || activeTab === 'women' ? (
               <div className="max-w-4xl mx-auto space-y-6 w-full">
                 {/* Add Product Form Card */}
-                <section className="bg-[var(--card)] border border-[var(--line)] rounded-2xl p-4 sm:p-5 shadow-sm max-w-full">
+                <section className="bg-[var(--card)] border border-[var(--line)] rounded-2xl p-4 sm:p-5 shadow-sm w-full max-w-full">
                   <h3 className="font-bold text-sm sm:text-base mb-1 flex items-center gap-2">
                     <span className="w-2.5 h-2.5 rounded-full bg-[var(--red)] shrink-0"></span>
                     <span>إضافة منتج جديد ({activeTab === 'men' ? 'حمدر رجالي' : 'حمدر نسائي'})</span>
                   </h3>
                   <p className="text-xs text-[var(--muted)] mb-4">
-                    يتم ضغط الصورة تلقائياً في المتصفح إلى أقل من 150KB لحفظ فوري وسريع.
+                    أدخل بيانات المنتج (الصورة والاسم الإنجليزي والسعر اختيارية).
                   </p>
 
-                  <form onSubmit={handleAddProduct} className="space-y-4 max-w-full">
+                  <form onSubmit={handleAddProduct} className="space-y-4 w-full max-w-full">
                     {/* Photo Picker */}
                     <div>
                       <label className="block text-xs font-bold mb-1.5 text-[var(--ink)]">
                         صورة المنتج (اختياري)
                       </label>
-                      <div className="flex flex-col sm:flex-row items-center gap-3 sm:gap-4 max-w-full">
+                      <div className="flex flex-col sm:flex-row items-center gap-3 w-full max-w-full">
                         <div
-                          onClick={() => fileInputRef.current?.click()}
-                          className="w-32 h-32 rounded-xl border-2 border-dashed border-[var(--line)] hover:border-[var(--red)] transition-colors flex flex-col items-center justify-center cursor-pointer bg-[var(--bg)] relative overflow-hidden group shrink-0"
+                          onClick={() => addFileInputRef.current?.click()}
+                          className="w-28 h-28 rounded-xl border-2 border-dashed border-[var(--line)] hover:border-[var(--red)] transition-colors flex flex-col items-center justify-center cursor-pointer bg-[var(--bg)] relative overflow-hidden group shrink-0"
                         >
                           {imagePreview ? (
                             <img
@@ -511,37 +583,37 @@ export const AdminModal: React.FC<AdminModalProps> = ({
                           ) : (
                             <div className="flex flex-col items-center text-center p-2 text-[var(--muted)] group-hover:text-[var(--red)]">
                               <Upload className="w-5 h-5 mb-1" />
-                              <span className="text-xs font-semibold">اختيار صورة</span>
-                              <span className="text-[10px] text-[var(--muted)]">كاميرا / معرض</span>
+                              <span className="text-[11px] font-semibold">اختيار صورة</span>
+                              <span className="text-[9px] text-[var(--muted)]">كاميرا / معرض</span>
                             </div>
                           )}
                         </div>
 
-                        <div className="flex-1 text-xs text-[var(--muted)] space-y-1.5 min-w-0">
+                        <div className="flex-1 text-xs text-[var(--muted)] space-y-1.5 min-w-0 w-full">
                           <input
-                            ref={fileInputRef}
+                            ref={addFileInputRef}
                             type="file"
                             accept="image/*"
-                            onChange={handleImageSelect}
+                            onChange={handleAddImageSelect}
                             className="hidden"
                           />
                           <button
                             type="button"
-                            onClick={() => fileInputRef.current?.click()}
+                            onClick={() => addFileInputRef.current?.click()}
                             className="touch-btn px-3.5 py-1.5 rounded-xl border border-[var(--line)] bg-[var(--card)] hover:bg-[var(--bg)] font-semibold text-xs text-[var(--ink)] flex items-center gap-2 cursor-pointer"
                           >
                             <ImageIcon className="w-4 h-4 text-[var(--red)] shrink-0" />
                             <span>{imagePreview ? 'تغيير الصورة المحددة' : 'فتح المعرض أو الكاميرا'}</span>
                           </button>
                           <p className="text-[11px] leading-relaxed">
-                            تُحفظ الصورة كبيانات مشفرة مباشرة في قاعدة البيانات بدون خوادم تخزين وسيطة.
+                            يتم ضغط الصورة في المتصفح إلى أقل من 150KB وتُحفظ فوراً.
                           </p>
                         </div>
                       </div>
                     </div>
 
                     {/* Inputs - minimum 16px font-size to prevent iOS auto-zoom */}
-                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 max-w-full">
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 w-full max-w-full">
                       <div>
                         <label className="block text-xs font-bold mb-1 text-[var(--ink)]">
                           الاسم بالعربية <span className="text-red-500">*</span>
@@ -550,7 +622,10 @@ export const AdminModal: React.FC<AdminModalProps> = ({
                           type="text"
                           required
                           value={newNameAr}
-                          onChange={(e) => setNewNameAr(e.target.value)}
+                          onChange={(e) => {
+                            setNewNameAr(e.target.value);
+                            if (addError) setAddError('');
+                          }}
                           placeholder="مثال: جاكيت صوف دافئ"
                           style={{ fontSize: '16px' }}
                           className="w-full px-3 py-2 rounded-xl border border-[var(--line)] bg-[var(--bg)] focus:outline-none focus:border-[var(--red)]"
@@ -559,15 +634,14 @@ export const AdminModal: React.FC<AdminModalProps> = ({
 
                       <div>
                         <label className="block text-xs font-bold mb-1 text-[var(--ink)]">
-                          الاسم بالإنجليزية <span className="text-red-500">*</span>
+                          الاسم بالإنجليزية (اختياري)
                         </label>
                         <input
                           type="text"
-                          required
                           dir="ltr"
                           value={newNameEn}
                           onChange={(e) => setNewNameEn(e.target.value)}
-                          placeholder="e.g. Warm Wool Jacket"
+                          placeholder="اختياري - يترك فارغاً للتكرار"
                           style={{ fontSize: '16px' }}
                           className="w-full px-3 py-2 rounded-xl border border-[var(--line)] bg-[var(--bg)] focus:outline-none focus:border-[var(--red)] text-left"
                         />
@@ -630,14 +704,14 @@ export const AdminModal: React.FC<AdminModalProps> = ({
                   </form>
                 </section>
 
-                {/* Product List Section */}
-                <section className="space-y-3 max-w-full">
+                {/* Product List Section (Tappable rows to edit / delete) */}
+                <section className="space-y-3 w-full max-w-full">
                   <div className="flex items-center justify-between px-1">
                     <h3 className="font-bold text-sm sm:text-base text-[var(--ink)]">
                       قائمة المنتجات الحالية ({filteredProducts.length})
                     </h3>
                     <span className="text-[11px] text-[var(--muted)]">
-                      التعديلات تحفظ فورياً
+                      اضغط على أي منتج لتعديله
                     </span>
                   </div>
 
@@ -646,14 +720,15 @@ export const AdminModal: React.FC<AdminModalProps> = ({
                       لا توجد منتجات في هذا القسم حالياً. استخدم النموذج أعلاه للإضافة.
                     </div>
                   ) : (
-                    <div className="space-y-2 max-w-full">
+                    <div className="space-y-2.5 w-full max-w-full">
                       {filteredProducts.map((prod) => (
                         <div
                           key={prod.id}
-                          className="bg-[var(--card)] border border-[var(--line)] rounded-xl p-2.5 sm:p-3 flex flex-col sm:flex-row items-center gap-2.5 shadow-xs hover:border-[var(--muted)] transition-colors max-w-full"
+                          onClick={() => openEditModal(prod)}
+                          className="bg-[var(--card)] border border-[var(--line)] rounded-xl p-3 flex items-center justify-between gap-3 shadow-xs hover:border-[var(--red)] transition-all cursor-pointer w-full max-w-full active:scale-[0.99]"
                         >
                           {/* Thumbnail */}
-                          <div className="w-14 h-14 sm:w-16 sm:h-16 rounded-lg overflow-hidden shrink-0 border border-[var(--line)] bg-[var(--bg)] relative">
+                          <div className="w-14 h-14 rounded-lg overflow-hidden shrink-0 border border-[var(--line)] bg-[var(--bg)] relative">
                             {prod.imageUrl ? (
                               <img
                                 src={prod.imageUrl}
@@ -667,72 +742,26 @@ export const AdminModal: React.FC<AdminModalProps> = ({
                             )}
                           </div>
 
-                          {/* Editable fields */}
-                          <div className="flex-1 grid grid-cols-1 sm:grid-cols-3 gap-2 w-full min-w-0">
-                            <div>
-                              <span className="block text-[10px] text-[var(--muted)] font-medium">
-                                الاسم بالعربية
+                          {/* Product Info */}
+                          <div className="flex-1 min-w-0">
+                            <h4 className="font-bold text-sm text-[var(--ink)] truncate">
+                              {prod.nameAr}
+                            </h4>
+                            <p className="text-xs text-[var(--muted)] truncate" dir="ltr">
+                              {prod.nameEn || prod.nameAr}
+                            </p>
+                            {prod.price && (
+                              <span className="text-xs font-bold text-[var(--gold)]">
+                                ${prod.price.replace('$', '')}
                               </span>
-                              <input
-                                type="text"
-                                defaultValue={prod.nameAr}
-                                style={{ fontSize: '16px' }}
-                                onBlur={(e) => {
-                                  if (e.target.value !== prod.nameAr) {
-                                    handleInlineUpdate(prod.id, 'nameAr', e.target.value);
-                                  }
-                                }}
-                                className="w-full px-2.5 py-1.5 rounded-lg border border-[var(--line)] bg-[var(--bg)] focus:outline-none focus:border-[var(--red)]"
-                              />
-                            </div>
-
-                            <div>
-                              <span className="block text-[10px] text-[var(--muted)] font-medium">
-                                الاسم بالإنجليزية
-                              </span>
-                              <input
-                                type="text"
-                                dir="ltr"
-                                defaultValue={prod.nameEn}
-                                style={{ fontSize: '16px' }}
-                                onBlur={(e) => {
-                                  if (e.target.value !== prod.nameEn) {
-                                    handleInlineUpdate(prod.id, 'nameEn', e.target.value);
-                                  }
-                                }}
-                                className="w-full px-2.5 py-1.5 rounded-lg border border-[var(--line)] bg-[var(--bg)] focus:outline-none focus:border-[var(--red)] text-left"
-                              />
-                            </div>
-
-                            <div>
-                              <span className="block text-[10px] text-[var(--muted)] font-medium">
-                                السعر ($)
-                              </span>
-                              <input
-                                type="text"
-                                dir="ltr"
-                                defaultValue={prod.price || ''}
-                                style={{ fontSize: '16px' }}
-                                onBlur={(e) => {
-                                  if (e.target.value !== (prod.price || '')) {
-                                    handleInlineUpdate(prod.id, 'price', e.target.value);
-                                  }
-                                }}
-                                placeholder="اختياري"
-                                className="w-full px-2.5 py-1.5 rounded-lg border border-[var(--line)] bg-[var(--bg)] focus:outline-none focus:border-[var(--red)] text-left"
-                              />
-                            </div>
+                            )}
                           </div>
 
-                          {/* Delete button */}
-                          <button
-                            type="button"
-                            onClick={() => handleDeleteProduct(prod.id)}
-                            title="حذف المنتج"
-                            className="touch-btn w-9 h-9 rounded-lg text-red-600 hover:bg-red-500/10 flex items-center justify-center shrink-0 transition-colors cursor-pointer self-end sm:self-center"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
+                          {/* Action Cue */}
+                          <div className="flex items-center gap-1.5 shrink-0 text-xs text-[var(--muted)]">
+                            <span className="hidden sm:inline text-[11px]">تعديل</span>
+                            <Edit3 className="w-4 h-4 text-[var(--red)]" />
+                          </div>
                         </div>
                       ))}
                     </div>
@@ -741,9 +770,9 @@ export const AdminModal: React.FC<AdminModalProps> = ({
               </div>
             ) : (
               // Settings Tab
-              <div className="max-w-2xl mx-auto space-y-6 w-full">
+              <div className="max-w-2xl mx-auto space-y-6 w-full max-w-full">
                 {/* General Settings Card */}
-                <section className="bg-[var(--card)] border border-[var(--line)] rounded-2xl p-4 sm:p-5 shadow-sm max-w-full">
+                <section className="bg-[var(--card)] border border-[var(--line)] rounded-2xl p-4 sm:p-5 shadow-sm w-full max-w-full">
                   <h3 className="font-bold text-base mb-1 flex items-center gap-2">
                     <Megaphone className="w-4 h-4 text-[var(--red)] shrink-0" />
                     <span>بيانات وشريط الإعلانات</span>
@@ -752,7 +781,7 @@ export const AdminModal: React.FC<AdminModalProps> = ({
                     التحكم في نص الإعلان الأحمر وأرقام التواصل الرسمية
                   </p>
 
-                  <form onSubmit={handleSaveSettings} className="space-y-4 max-w-full">
+                  <form onSubmit={handleSaveSettings} className="space-y-4 w-full max-w-full">
                     <div>
                       <label className="block text-xs font-bold mb-1">
                         نص الشريط الإعلاني (أعلى الموقع)
@@ -770,7 +799,7 @@ export const AdminModal: React.FC<AdminModalProps> = ({
                       </span>
                     </div>
 
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 max-w-full">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 w-full max-w-full">
                       <div>
                         <label className="block text-xs font-bold mb-1 flex items-center gap-1.5">
                           <Phone className="w-3.5 h-3.5 text-[var(--red)] shrink-0" />
@@ -842,7 +871,7 @@ export const AdminModal: React.FC<AdminModalProps> = ({
                 </section>
 
                 {/* Change Password Card */}
-                <section className="bg-[var(--card)] border border-[var(--line)] rounded-2xl p-4 sm:p-5 shadow-sm max-w-full">
+                <section className="bg-[var(--card)] border border-[var(--line)] rounded-2xl p-4 sm:p-5 shadow-sm w-full max-w-full">
                   <h3 className="font-bold text-base mb-1 flex items-center gap-2">
                     <KeyRound className="w-4 h-4 text-[var(--gold)] shrink-0" />
                     <span>تغيير الرمز السري</span>
@@ -863,7 +892,7 @@ export const AdminModal: React.FC<AdminModalProps> = ({
                     </div>
                   )}
 
-                  <form onSubmit={handleChangePassword} className="space-y-3 max-w-full">
+                  <form onSubmit={handleChangePassword} className="space-y-3 w-full max-w-full">
                     <div>
                       <label className="block text-xs font-bold mb-1">
                         الرمز السري الجديد
@@ -888,7 +917,7 @@ export const AdminModal: React.FC<AdminModalProps> = ({
                 </section>
 
                 {/* Database Connection Status Card */}
-                <section className="bg-[var(--card)] border border-[var(--line)] rounded-2xl p-4 sm:p-5 shadow-sm max-w-full">
+                <section className="bg-[var(--card)] border border-[var(--line)] rounded-2xl p-4 sm:p-5 shadow-sm w-full max-w-full">
                   <div className="flex items-center justify-between mb-2">
                     <h3 className="font-bold text-xs sm:text-sm flex items-center gap-2">
                       <Database className="w-4 h-4 text-[var(--red)] shrink-0" />
@@ -905,7 +934,7 @@ export const AdminModal: React.FC<AdminModalProps> = ({
                     )}
                   </div>
                   <p className="text-[11px] text-[var(--muted)] leading-relaxed">
-                    تم إيقاف خدمة التخزين السحابي Firebase Storage بالكامل لتجنب التعليق. الصور تحفظ مباشرة داخل قاعدة البيانات بعد ضغطها إلى أقل من 150KB.
+                    قواعد الأمان مفعلة: القراءة متاحة للجميع، والكتابة محصورة بمدير المتجر المعتمد.
                   </p>
                 </section>
 
@@ -924,8 +953,8 @@ export const AdminModal: React.FC<AdminModalProps> = ({
             )}
           </div>
 
-          {/* Sticky Bottom Bar (never wider than 100vw, flex-wrap, safe bottom) */}
-          <footer className="sticky bottom-0 bg-[var(--card)] border-t border-[var(--line)] px-3 sm:px-4 py-2 flex flex-wrap items-center justify-between gap-2 safe-bottom max-w-full shrink-0">
+          {/* Sticky Bottom Bar */}
+          <footer className="sticky bottom-0 bg-[var(--card)] border-t border-[var(--line)] px-3 py-2 flex flex-wrap items-center justify-between gap-2 safe-bottom w-full max-w-full shrink-0">
             <button
               onClick={handleLogout}
               className="touch-btn px-2.5 py-1 rounded-lg border border-red-500/20 text-red-600 hover:bg-red-500/10 text-xs font-bold transition-colors inline-flex items-center gap-1 cursor-pointer"
@@ -940,6 +969,179 @@ export const AdminModal: React.FC<AdminModalProps> = ({
               إغلاق والعودة للمتجر
             </button>
           </footer>
+        </div>
+      )}
+
+      {/* Edit Product Modal (Tapping any product opens this editor) */}
+      {editingProduct && (
+        <div
+          dir="rtl"
+          className="fixed inset-0 z-60 bg-black/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 overflow-y-auto"
+        >
+          <div className="w-full max-w-lg bg-[var(--card)] border border-[var(--line)] rounded-2xl p-4 sm:p-6 shadow-xl my-auto animate-in zoom-in-95 duration-150">
+            <div className="flex items-center justify-between pb-3 mb-4 border-b border-[var(--line)]">
+              <h3 className="font-bold text-base flex items-center gap-2">
+                <Edit3 className="w-4 h-4 text-[var(--red)]" />
+                <span>تعديل المنتج</span>
+              </h3>
+              <button
+                type="button"
+                onClick={() => setEditingProduct(null)}
+                className="p-1 rounded-lg hover:bg-[var(--bg)] text-[var(--muted)] hover:text-[var(--ink)]"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveEdit} className="space-y-4">
+              {/* Photo preview and replace button */}
+              <div>
+                <label className="block text-xs font-bold mb-1.5">صورة المنتج</label>
+                <div className="flex items-center gap-3">
+                  <div className="w-20 h-20 rounded-xl overflow-hidden border border-[var(--line)] bg-[var(--bg)] shrink-0 relative">
+                    {editImageUrl ? (
+                      <img
+                        src={editImageUrl}
+                        alt="Preview"
+                        className="w-full h-full object-cover"
+                      />
+                    ) : (
+                      <div className="w-full h-full diagonal-placeholder flex items-center justify-center text-[10px] text-[var(--muted)] font-mono">
+                        بدون صورة
+                      </div>
+                    )}
+                  </div>
+                  <div className="space-y-1.5 flex-1 min-w-0">
+                    <input
+                      ref={editFileInputRef}
+                      type="file"
+                      accept="image/*"
+                      onChange={handleEditImageSelect}
+                      className="hidden"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => editFileInputRef.current?.click()}
+                      className="touch-btn px-3 py-1.5 rounded-xl border border-[var(--line)] bg-[var(--bg)] hover:bg-[var(--card)] text-xs font-bold flex items-center gap-1.5 cursor-pointer"
+                    >
+                      <Upload className="w-3.5 h-3.5 text-[var(--red)]" />
+                      <span>استبدال الصورة</span>
+                    </button>
+                    {editImageUrl && (
+                      <button
+                        type="button"
+                        onClick={() => setEditImageUrl('')}
+                        className="text-[11px] text-red-500 hover:underline block"
+                      >
+                        حذف الصورة الحالية
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {/* Editable Name Ar */}
+              <div>
+                <label className="block text-xs font-bold mb-1">
+                  الاسم بالعربية <span className="text-red-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={editNameAr}
+                  onChange={(e) => setEditNameAr(e.target.value)}
+                  style={{ fontSize: '16px' }}
+                  className="w-full px-3 py-2 rounded-xl border border-[var(--line)] bg-[var(--bg)] focus:outline-none focus:border-[var(--red)]"
+                />
+              </div>
+
+              {/* Editable Name En */}
+              <div>
+                <label className="block text-xs font-bold mb-1">
+                  الاسم بالإنجليزية (اختياري)
+                </label>
+                <input
+                  type="text"
+                  dir="ltr"
+                  value={editNameEn}
+                  onChange={(e) => setEditNameEn(e.target.value)}
+                  style={{ fontSize: '16px' }}
+                  className="w-full px-3 py-2 rounded-xl border border-[var(--line)] bg-[var(--bg)] focus:outline-none focus:border-[var(--red)] text-left"
+                />
+              </div>
+
+              {/* Editable Price */}
+              <div>
+                <label className="block text-xs font-bold mb-1">السعر ($)</label>
+                <input
+                  type="text"
+                  dir="ltr"
+                  value={editPrice}
+                  onChange={(e) => setEditPrice(e.target.value)}
+                  placeholder="مثال: 25 أو $25"
+                  style={{ fontSize: '16px' }}
+                  className="w-full px-3 py-2 rounded-xl border border-[var(--line)] bg-[var(--bg)] focus:outline-none focus:border-[var(--red)] text-left"
+                />
+              </div>
+
+              {/* Actions & Feedback */}
+              <div className="pt-2 flex flex-wrap items-center justify-between gap-2 border-t border-[var(--line)]">
+                <div className="flex items-center gap-2">
+                  <button
+                    type="submit"
+                    disabled={isUpdating}
+                    className="touch-btn px-5 py-2 rounded-xl bg-[var(--red)] hover:bg-[#a51217] text-white font-bold text-xs flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                  >
+                    {isUpdating ? (
+                      <>
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        <span>جاري الحفظ…</span>
+                      </>
+                    ) : (
+                      <>
+                        <Save className="w-3.5 h-3.5" />
+                        <span>حفظ التعديلات</span>
+                      </>
+                    )}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => handleDeleteProduct(editingProduct.id)}
+                    className="touch-btn px-3 py-2 rounded-xl border border-red-500/20 text-red-600 hover:bg-red-500/10 font-bold text-xs flex items-center gap-1 cursor-pointer"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>حذف</span>
+                  </button>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => setEditingProduct(null)}
+                  className="touch-btn px-4 py-2 rounded-xl border border-[var(--line)] bg-[var(--bg)] hover:bg-[var(--card)] font-bold text-xs"
+                >
+                  إلغاء
+                </button>
+              </div>
+
+              {editSuccess && (
+                <div className="p-2 rounded-lg bg-emerald-500/10 text-emerald-600 text-xs font-bold flex items-center gap-1.5 animate-in fade-in">
+                  <CheckCircle2 className="w-4 h-4 shrink-0" />
+                  <span>تم الحفظ ✓</span>
+                </div>
+              )}
+
+              {editError && (
+                <div
+                  role="alert"
+                  className="p-2.5 rounded-lg bg-red-500/15 border border-red-500/30 text-red-600 text-xs font-bold flex items-center gap-1.5 animate-shake"
+                >
+                  <AlertTriangle className="w-4 h-4 shrink-0" />
+                  <span>{editError}</span>
+                </div>
+              )}
+            </form>
+          </div>
         </div>
       )}
     </div>
