@@ -1,52 +1,10 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-
-    // Default deny
     match /{document=**} {
-      allow read, write: if false;
-    }
-
-    // Admin helper: check user is authenticated with admin email
-    function isAdmin() {
-      return request.auth != null && (
-        request.auth.token.email == 'admin@hamdar-site.app' ||
-        request.auth.token.email == 'alriachybachir621@gmail.com'
-      );
-    }
-
-    function isValidId(id) {
-      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
-    }
-
-    function isValidProduct(data) {
-      return data.keys().hasAll(['store', 'nameAr']) &&
-        data.store in ['men', 'women'] &&
-        data.nameAr is string && data.nameAr.size() > 0 && data.nameAr.size() <= 120 &&
-        (!('nameEn' in data) || (data.nameEn is string && data.nameEn.size() <= 120)) &&
-        (!('price' in data) || (data.price is string && data.price.size() <= 30)) &&
-        (!('imageUrl' in data) || (data.imageUrl is string && data.imageUrl.size() <= 500000)) &&
-        (!('createdAt' in data) || (data.createdAt is number));
-    }
-
-    function isValidSettings(data) {
-      return (!('banner' in data) || (data.banner is string && data.banner.size() <= 300)) &&
-        (!('menPhone' in data) || (data.menPhone is string && data.menPhone.size() <= 30)) &&
-        (!('womenPhone' in data) || (data.womenPhone is string && data.womenPhone.size() <= 30));
-    }
-
-    // Products collection: public read, write only for admin
-    match /products/{productId} {
       allow read: if true;
-      allow create: if isAdmin() && isValidId(productId) && isValidProduct(request.resource.data);
-      allow update: if isAdmin() && isValidId(productId) && isValidProduct(request.resource.data);
-      allow delete: if isAdmin() && isValidId(productId);
-    }
-
-    // Settings collection: public read, write only for admin
-    match /settings/{settingId} {
-      allow read: if true;
-      allow write: if isAdmin() && isValidId(settingId) && isValidSettings(request.resource.data);
+      allow write: if request.auth != null
+        && request.auth.token.email == "admin@hamdar-site.app";
     }
   }
 }

@@ -117,6 +117,30 @@ export const AdminModal: React.FC<AdminModalProps> = ({
   const [settingsSuccess, setSettingsSuccess] = useState(false);
   const [passwordStatus, setPasswordStatus] = useState('');
 
+  // Lock body when admin panel is open, restore on close
+  useEffect(() => {
+    if (isOpen) {
+      document.body.classList.add('admin-open');
+      const originalOverflow = document.body.style.overflow;
+      const originalPosition = document.body.style.position;
+      const originalWidth = document.body.style.width;
+      const originalInset = document.body.style.top;
+
+      document.body.style.position = 'fixed';
+      document.body.style.inset = '0';
+      document.body.style.width = '100%';
+      document.body.style.overflow = 'hidden';
+
+      return () => {
+        document.body.classList.remove('admin-open');
+        document.body.style.position = originalPosition;
+        document.body.style.inset = originalInset;
+        document.body.style.width = originalWidth;
+        document.body.style.overflow = originalOverflow;
+      };
+    }
+  }, [isOpen]);
+
   // Lockout timer ticker
   useEffect(() => {
     const checkLockout = () => {
@@ -379,21 +403,21 @@ export const AdminModal: React.FC<AdminModalProps> = ({
   return (
     <div
       dir="rtl"
-      className="admin-overlay-container z-50 flex flex-col bg-[var(--bg)] text-[var(--ink)] font-body animate-in fade-in duration-200"
+      className="admin-overlay-container z-50 flex flex-col bg-[var(--bg)] text-[var(--ink)] font-body"
       style={{
         position: 'fixed',
         inset: 0,
         width: '100%',
         maxWidth: '100vw',
-        overflowX: 'hidden',
         overflowY: 'auto',
+        overflowX: 'hidden',
         overscrollBehaviorX: 'none',
         touchAction: 'pan-y',
         WebkitOverflowScrolling: 'touch',
       }}
     >
       {/* Top Header - flex-wrap and gap: 8px to prevent overflow on iPhone Safari */}
-      <header className="flex flex-wrap items-center justify-between px-3 py-2.5 bg-[var(--card)] border-b border-[var(--line)] safe-top gap-2 w-full max-w-full shrink-0">
+      <header className="flex flex-wrap items-center justify-between px-3 py-2.5 bg-[var(--card)] border-b border-[var(--line)] safe-top gap-2 w-full max-w-full shrink-0 box-border">
         <div className="flex items-center gap-2 min-w-0">
           <div className="w-8 h-8 rounded-full bg-[var(--red)]/10 text-[var(--red)] flex items-center justify-center font-bold shrink-0">
             H
@@ -431,8 +455,8 @@ export const AdminModal: React.FC<AdminModalProps> = ({
       {/* Main Content Area */}
       {!user ? (
         // Single Passcode Login View
-        <div className="flex-1 overflow-y-auto p-4 flex items-center justify-center w-full max-w-full">
-          <div className="w-full max-w-sm bg-[var(--card)] border border-[var(--line)] rounded-2xl p-5 sm:p-7 shadow-sm">
+        <div className="flex-1 overflow-y-auto overflow-x-hidden p-4 flex items-center justify-center w-full max-w-full box-border">
+          <div className="w-full max-w-sm bg-[var(--card)] border border-[var(--line)] rounded-2xl p-5 sm:p-7 shadow-sm box-border overflow-hidden">
             <div className="text-center mb-6">
               <div className="inline-flex items-center justify-center w-12 h-12 rounded-2xl bg-[var(--red)]/10 text-[var(--red)] mb-2.5">
                 <Lock className="w-6 h-6" />
@@ -446,7 +470,7 @@ export const AdminModal: React.FC<AdminModalProps> = ({
             {authError && (
               <div
                 role="alert"
-                className="mb-4 p-3 rounded-xl bg-red-500/15 border border-red-500/30 text-red-600 text-center font-bold text-sm animate-shake"
+                className="mb-4 p-3 rounded-xl bg-red-500/15 border border-red-500/30 text-red-600 text-center font-bold text-sm"
               >
                 {authError}
               </div>
@@ -463,19 +487,19 @@ export const AdminModal: React.FC<AdminModalProps> = ({
               </div>
             )}
 
-            <form onSubmit={handleLogin} className="space-y-4">
-              <div>
+            <form onSubmit={handleLogin} className="space-y-4 w-full box-border">
+              <div className="w-full box-border">
                 <label className="block text-xs font-bold mb-1.5 text-[var(--ink)]">
                   الرمز السري
                 </label>
-                <div className="relative">
+                <div className="relative w-full box-border">
                   <input
                     type={showPassword ? 'text' : 'password'}
                     required
                     disabled={lockoutSeconds > 0}
                     value={passcode}
                     onChange={(e) => setPasscode(e.target.value)}
-                    className="w-full px-3.5 py-2.5 rounded-xl border border-[var(--line)] bg-[var(--bg)] text-[var(--ink)] focus:outline-none focus:border-[var(--red)] pl-10 disabled:opacity-50"
+                    className="w-full box-border px-3.5 py-2.5 rounded-xl border border-[var(--line)] bg-[var(--bg)] text-[var(--ink)] focus:outline-none focus:border-[var(--red)] pl-10 disabled:opacity-50"
                     placeholder="••••••••"
                     style={{ fontSize: '16px' }}
                     autoFocus
@@ -512,12 +536,12 @@ export const AdminModal: React.FC<AdminModalProps> = ({
         </div>
       ) : (
         // Authenticated Admin Dashboard
-        <div className="flex-1 flex flex-col overflow-hidden w-full max-w-full">
+        <div className="flex-1 flex flex-col overflow-hidden w-full max-w-full box-border">
           {/* Navigation Tabs (3 equal tabs, flex: 1, min-width: 0, fits 375px screens) */}
-          <div className="flex w-full max-w-full border-b border-[var(--line)] bg-[var(--card)] p-1 gap-1 shrink-0">
+          <div className="flex w-full max-w-full border-b border-[var(--line)] bg-[var(--card)] p-1 gap-1 shrink-0 box-border">
             <button
               onClick={() => setActiveTab('men')}
-              className={`touch-btn flex-1 min-w-0 py-2 px-1 text-center font-bold text-xs sm:text-sm rounded-lg transition-all cursor-pointer truncate ${
+              className={`touch-btn flex-1 min-w-0 py-2 px-1 text-center font-bold text-xs rounded-lg transition-all cursor-pointer truncate box-border ${
                 activeTab === 'men'
                   ? 'bg-[var(--red)] text-white shadow-xs'
                   : 'text-[var(--muted)] hover:text-[var(--ink)] bg-transparent'
@@ -528,7 +552,7 @@ export const AdminModal: React.FC<AdminModalProps> = ({
 
             <button
               onClick={() => setActiveTab('women')}
-              className={`touch-btn flex-1 min-w-0 py-2 px-1 text-center font-bold text-xs sm:text-sm rounded-lg transition-all cursor-pointer truncate ${
+              className={`touch-btn flex-1 min-w-0 py-2 px-1 text-center font-bold text-xs rounded-lg transition-all cursor-pointer truncate box-border ${
                 activeTab === 'women'
                   ? 'bg-[var(--gold)] text-black shadow-xs'
                   : 'text-[var(--muted)] hover:text-[var(--ink)] bg-transparent'
@@ -539,7 +563,7 @@ export const AdminModal: React.FC<AdminModalProps> = ({
 
             <button
               onClick={() => setActiveTab('settings')}
-              className={`touch-btn flex-1 min-w-0 py-2 px-1 text-center font-bold text-xs sm:text-sm rounded-lg transition-all cursor-pointer truncate ${
+              className={`touch-btn flex-1 min-w-0 py-2 px-1 text-center font-bold text-xs rounded-lg transition-all cursor-pointer truncate box-border ${
                 activeTab === 'settings'
                   ? 'bg-[var(--ink)] text-[var(--bg)] shadow-xs'
                   : 'text-[var(--muted)] hover:text-[var(--ink)] bg-transparent'
@@ -550,11 +574,11 @@ export const AdminModal: React.FC<AdminModalProps> = ({
           </div>
 
           {/* Scrollable Content */}
-          <div className="flex-1 overflow-y-auto p-3 sm:p-5 pb-24 w-full max-w-full">
+          <div className="flex-1 overflow-y-auto overflow-x-hidden p-3 sm:p-5 pb-24 w-full max-w-full box-border">
             {activeTab === 'men' || activeTab === 'women' ? (
-              <div className="max-w-4xl mx-auto space-y-6 w-full">
+              <div className="max-w-4xl mx-auto space-y-6 w-full max-w-full box-border">
                 {/* Add Product Form Card */}
-                <section className="bg-[var(--card)] border border-[var(--line)] rounded-2xl p-4 sm:p-5 shadow-sm w-full max-w-full">
+                <section className="bg-[var(--card)] border border-[var(--line)] rounded-2xl p-4 sm:p-5 shadow-sm w-full max-w-full box-border overflow-hidden">
                   <h3 className="font-bold text-sm sm:text-base mb-1 flex items-center gap-2">
                     <span className="w-2.5 h-2.5 rounded-full bg-[var(--red)] shrink-0"></span>
                     <span>إضافة منتج جديد ({activeTab === 'men' ? 'حمدر رجالي' : 'حمدر نسائي'})</span>
@@ -563,16 +587,16 @@ export const AdminModal: React.FC<AdminModalProps> = ({
                     أدخل بيانات المنتج (الصورة والاسم الإنجليزي والسعر اختيارية).
                   </p>
 
-                  <form onSubmit={handleAddProduct} className="space-y-4 w-full max-w-full">
+                  <form onSubmit={handleAddProduct} className="space-y-4 w-full max-w-full box-border">
                     {/* Photo Picker */}
-                    <div>
+                    <div className="w-full box-border">
                       <label className="block text-xs font-bold mb-1.5 text-[var(--ink)]">
                         صورة المنتج (اختياري)
                       </label>
-                      <div className="flex flex-col sm:flex-row items-center gap-3 w-full max-w-full">
+                      <div className="flex flex-col sm:flex-row items-center gap-3 w-full max-w-full overflow-hidden box-border">
                         <div
                           onClick={() => addFileInputRef.current?.click()}
-                          className="w-28 h-28 rounded-xl border-2 border-dashed border-[var(--line)] hover:border-[var(--red)] transition-colors flex flex-col items-center justify-center cursor-pointer bg-[var(--bg)] relative overflow-hidden group shrink-0"
+                          className="w-28 h-28 max-w-full rounded-xl border-2 border-dashed border-[var(--line)] hover:border-[var(--red)] transition-colors flex flex-col items-center justify-center cursor-pointer bg-[var(--bg)] relative overflow-hidden group shrink-0 box-border"
                         >
                           {imagePreview ? (
                             <img
@@ -589,7 +613,7 @@ export const AdminModal: React.FC<AdminModalProps> = ({
                           )}
                         </div>
 
-                        <div className="flex-1 text-xs text-[var(--muted)] space-y-1.5 min-w-0 w-full">
+                        <div className="flex-1 text-xs text-[var(--muted)] space-y-1.5 min-w-0 w-full box-border">
                           <input
                             ref={addFileInputRef}
                             type="file"
@@ -600,10 +624,10 @@ export const AdminModal: React.FC<AdminModalProps> = ({
                           <button
                             type="button"
                             onClick={() => addFileInputRef.current?.click()}
-                            className="touch-btn px-3.5 py-1.5 rounded-xl border border-[var(--line)] bg-[var(--card)] hover:bg-[var(--bg)] font-semibold text-xs text-[var(--ink)] flex items-center gap-2 cursor-pointer"
+                            className="touch-btn px-3.5 py-1.5 rounded-xl border border-[var(--line)] bg-[var(--card)] hover:bg-[var(--bg)] font-semibold text-xs text-[var(--ink)] flex items-center gap-2 cursor-pointer max-w-full"
                           >
                             <ImageIcon className="w-4 h-4 text-[var(--red)] shrink-0" />
-                            <span>{imagePreview ? 'تغيير الصورة المحددة' : 'فتح المعرض أو الكاميرا'}</span>
+                            <span className="truncate">{imagePreview ? 'تغيير الصورة المحددة' : 'فتح المعرض أو الكاميرا'}</span>
                           </button>
                           <p className="text-[11px] leading-relaxed">
                             يتم ضغط الصورة في المتصفح إلى أقل من 150KB وتُحفظ فوراً.
@@ -613,8 +637,8 @@ export const AdminModal: React.FC<AdminModalProps> = ({
                     </div>
 
                     {/* Inputs - minimum 16px font-size to prevent iOS auto-zoom */}
-                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 w-full max-w-full">
-                      <div>
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 w-full max-w-full box-border">
+                      <div className="w-full min-w-0 box-border">
                         <label className="block text-xs font-bold mb-1 text-[var(--ink)]">
                           الاسم بالعربية <span className="text-red-500">*</span>
                         </label>
@@ -628,11 +652,11 @@ export const AdminModal: React.FC<AdminModalProps> = ({
                           }}
                           placeholder="مثال: جاكيت صوف دافئ"
                           style={{ fontSize: '16px' }}
-                          className="w-full px-3 py-2 rounded-xl border border-[var(--line)] bg-[var(--bg)] focus:outline-none focus:border-[var(--red)]"
+                          className="w-full box-border px-3 py-2 rounded-xl border border-[var(--line)] bg-[var(--bg)] focus:outline-none focus:border-[var(--red)]"
                         />
                       </div>
 
-                      <div>
+                      <div className="w-full min-w-0 box-border">
                         <label className="block text-xs font-bold mb-1 text-[var(--ink)]">
                           الاسم بالإنجليزية (اختياري)
                         </label>
@@ -643,11 +667,11 @@ export const AdminModal: React.FC<AdminModalProps> = ({
                           onChange={(e) => setNewNameEn(e.target.value)}
                           placeholder="اختياري - يترك فارغاً للتكرار"
                           style={{ fontSize: '16px' }}
-                          className="w-full px-3 py-2 rounded-xl border border-[var(--line)] bg-[var(--bg)] focus:outline-none focus:border-[var(--red)] text-left"
+                          className="w-full box-border px-3 py-2 rounded-xl border border-[var(--line)] bg-[var(--bg)] focus:outline-none focus:border-[var(--red)] text-left"
                         />
                       </div>
 
-                      <div>
+                      <div className="w-full min-w-0 box-border">
                         <label className="block text-xs font-bold mb-1 text-[var(--ink)]">
                           السعر بالدولار $ (اختياري)
                         </label>
@@ -658,16 +682,16 @@ export const AdminModal: React.FC<AdminModalProps> = ({
                           onChange={(e) => setNewPrice(e.target.value)}
                           placeholder="مثال: 25 أو $25"
                           style={{ fontSize: '16px' }}
-                          className="w-full px-3 py-2 rounded-xl border border-[var(--line)] bg-[var(--bg)] focus:outline-none focus:border-[var(--red)] text-left"
+                          className="w-full box-border px-3 py-2 rounded-xl border border-[var(--line)] bg-[var(--bg)] focus:outline-none focus:border-[var(--red)] text-left"
                         />
                       </div>
                     </div>
 
-                    <div className="pt-2">
+                    <div className="pt-2 w-full box-border">
                       <button
                         type="submit"
                         disabled={isAdding}
-                        className="touch-btn px-6 py-2.5 rounded-xl bg-[var(--red)] hover:bg-[#a51217] text-white font-bold text-sm transition-all shadow-sm disabled:opacity-50 flex items-center gap-2 cursor-pointer"
+                        className="touch-btn px-6 py-2.5 rounded-xl bg-[var(--red)] hover:bg-[#a51217] text-white font-bold text-sm transition-all shadow-sm disabled:opacity-50 flex items-center gap-2 cursor-pointer max-w-full"
                       >
                         {isAdding ? (
                           <>
@@ -684,7 +708,7 @@ export const AdminModal: React.FC<AdminModalProps> = ({
 
                       {/* Success state: show "تم الحفظ ✓" for 2 seconds */}
                       {addSuccess && (
-                        <div className="mt-2.5 inline-flex items-center gap-1.5 text-xs text-emerald-600 font-bold bg-emerald-500/10 px-3 py-1.5 rounded-lg animate-in fade-in">
+                        <div className="mt-2.5 inline-flex items-center gap-1.5 text-xs text-emerald-600 font-bold bg-emerald-500/10 px-3 py-1.5 rounded-lg">
                           <CheckCircle2 className="w-4 h-4 shrink-0" />
                           <span>تم الحفظ ✓</span>
                         </div>
@@ -694,7 +718,7 @@ export const AdminModal: React.FC<AdminModalProps> = ({
                       {addError && (
                         <div
                           role="alert"
-                          className="mt-2.5 p-2.5 rounded-xl bg-red-500/15 border border-red-500/30 text-red-600 text-xs font-bold flex items-center gap-2 animate-shake"
+                          className="mt-2.5 p-2.5 rounded-xl bg-red-500/15 border border-red-500/30 text-red-600 text-xs font-bold flex items-center gap-2"
                         >
                           <AlertTriangle className="w-4 h-4 shrink-0" />
                           <span>{addError}</span>
@@ -705,7 +729,7 @@ export const AdminModal: React.FC<AdminModalProps> = ({
                 </section>
 
                 {/* Product List Section (Tappable rows to edit / delete) */}
-                <section className="space-y-3 w-full max-w-full">
+                <section className="space-y-3 w-full max-w-full box-border">
                   <div className="flex items-center justify-between px-1">
                     <h3 className="font-bold text-sm sm:text-base text-[var(--ink)]">
                       قائمة المنتجات الحالية ({filteredProducts.length})
@@ -716,19 +740,19 @@ export const AdminModal: React.FC<AdminModalProps> = ({
                   </div>
 
                   {filteredProducts.length === 0 ? (
-                    <div className="text-center py-10 bg-[var(--card)] border border-[var(--line)] rounded-2xl text-[var(--muted)] text-xs sm:text-sm">
+                    <div className="text-center py-10 bg-[var(--card)] border border-[var(--line)] rounded-2xl text-[var(--muted)] text-xs sm:text-sm box-border">
                       لا توجد منتجات في هذا القسم حالياً. استخدم النموذج أعلاه للإضافة.
                     </div>
                   ) : (
-                    <div className="space-y-2.5 w-full max-w-full">
+                    <div className="space-y-2.5 w-full max-w-full box-border">
                       {filteredProducts.map((prod) => (
                         <div
                           key={prod.id}
                           onClick={() => openEditModal(prod)}
-                          className="bg-[var(--card)] border border-[var(--line)] rounded-xl p-3 flex items-center justify-between gap-3 shadow-xs hover:border-[var(--red)] transition-all cursor-pointer w-full max-w-full active:scale-[0.99]"
+                          className="bg-[var(--card)] border border-[var(--line)] rounded-xl p-3 flex items-center justify-between gap-2.5 shadow-xs hover:border-[var(--red)] transition-all cursor-pointer w-full max-w-full box-border overflow-hidden"
                         >
                           {/* Thumbnail */}
-                          <div className="w-14 h-14 rounded-lg overflow-hidden shrink-0 border border-[var(--line)] bg-[var(--bg)] relative">
+                          <div className="w-14 h-14 rounded-lg overflow-hidden shrink-0 border border-[var(--line)] bg-[var(--bg)] relative box-border">
                             {prod.imageUrl ? (
                               <img
                                 src={prod.imageUrl}
@@ -743,7 +767,7 @@ export const AdminModal: React.FC<AdminModalProps> = ({
                           </div>
 
                           {/* Product Info */}
-                          <div className="flex-1 min-w-0">
+                          <div className="flex-1 min-w-0 box-border">
                             <h4 className="font-bold text-sm text-[var(--ink)] truncate">
                               {prod.nameAr}
                             </h4>
@@ -770,9 +794,9 @@ export const AdminModal: React.FC<AdminModalProps> = ({
               </div>
             ) : (
               // Settings Tab
-              <div className="max-w-2xl mx-auto space-y-6 w-full max-w-full">
+              <div className="max-w-2xl mx-auto space-y-6 w-full max-w-full box-border">
                 {/* General Settings Card */}
-                <section className="bg-[var(--card)] border border-[var(--line)] rounded-2xl p-4 sm:p-5 shadow-sm w-full max-w-full">
+                <section className="bg-[var(--card)] border border-[var(--line)] rounded-2xl p-4 sm:p-5 shadow-sm w-full max-w-full box-border overflow-hidden">
                   <h3 className="font-bold text-base mb-1 flex items-center gap-2">
                     <Megaphone className="w-4 h-4 text-[var(--red)] shrink-0" />
                     <span>بيانات وشريط الإعلانات</span>
@@ -781,8 +805,8 @@ export const AdminModal: React.FC<AdminModalProps> = ({
                     التحكم في نص الإعلان الأحمر وأرقام التواصل الرسمية
                   </p>
 
-                  <form onSubmit={handleSaveSettings} className="space-y-4 w-full max-w-full">
-                    <div>
+                  <form onSubmit={handleSaveSettings} className="space-y-4 w-full max-w-full box-border">
+                    <div className="w-full box-border">
                       <label className="block text-xs font-bold mb-1">
                         نص الشريط الإعلاني (أعلى الموقع)
                       </label>
@@ -792,15 +816,15 @@ export const AdminModal: React.FC<AdminModalProps> = ({
                         onChange={(e) => setBannerText(e.target.value)}
                         placeholder="اتركه فاضي ليختفي"
                         style={{ fontSize: '16px' }}
-                        className="w-full px-3 py-2 rounded-xl border border-[var(--line)] bg-[var(--bg)] focus:outline-none focus:border-[var(--red)]"
+                        className="w-full box-border px-3 py-2 rounded-xl border border-[var(--line)] bg-[var(--bg)] focus:outline-none focus:border-[var(--red)]"
                       />
                       <span className="text-[11px] text-[var(--muted)] mt-1 block">
                         اتركه فاضي ليختفي تلقائياً من الصفحة.
                       </span>
                     </div>
 
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 w-full max-w-full">
-                      <div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 w-full max-w-full box-border">
+                      <div className="w-full min-w-0 box-border">
                         <label className="block text-xs font-bold mb-1 flex items-center gap-1.5">
                           <Phone className="w-3.5 h-3.5 text-[var(--red)] shrink-0" />
                           <span>رقم حمدر رجالي</span>
@@ -811,11 +835,11 @@ export const AdminModal: React.FC<AdminModalProps> = ({
                           value={menPhone}
                           onChange={(e) => setMenPhone(e.target.value)}
                           style={{ fontSize: '16px' }}
-                          className="w-full px-3 py-2 rounded-xl border border-[var(--line)] bg-[var(--bg)] text-left focus:outline-none focus:border-[var(--red)] font-mono"
+                          className="w-full box-border px-3 py-2 rounded-xl border border-[var(--line)] bg-[var(--bg)] text-left focus:outline-none focus:border-[var(--red)] font-mono"
                         />
                       </div>
 
-                      <div>
+                      <div className="w-full min-w-0 box-border">
                         <label className="block text-xs font-bold mb-1 flex items-center gap-1.5">
                           <Phone className="w-3.5 h-3.5 text-[var(--gold)] shrink-0" />
                           <span>رقم حمدر نسائي</span>
@@ -826,16 +850,16 @@ export const AdminModal: React.FC<AdminModalProps> = ({
                           value={womenPhone}
                           onChange={(e) => setWomenPhone(e.target.value)}
                           style={{ fontSize: '16px' }}
-                          className="w-full px-3 py-2 rounded-xl border border-[var(--line)] bg-[var(--bg)] text-left focus:outline-none focus:border-[var(--red)] font-mono"
+                          className="w-full box-border px-3 py-2 rounded-xl border border-[var(--line)] bg-[var(--bg)] text-left focus:outline-none focus:border-[var(--red)] font-mono"
                         />
                       </div>
                     </div>
 
-                    <div>
+                    <div className="w-full box-border">
                       <button
                         type="submit"
                         disabled={isSavingSettings}
-                        className="touch-btn px-6 py-2.5 rounded-xl bg-[var(--ink)] text-[var(--bg)] font-bold text-sm hover:opacity-90 transition-opacity flex items-center gap-2 cursor-pointer disabled:opacity-50"
+                        className="touch-btn px-6 py-2.5 rounded-xl bg-[var(--ink)] text-[var(--bg)] font-bold text-sm hover:opacity-90 transition-opacity flex items-center gap-2 cursor-pointer disabled:opacity-50 max-w-full"
                       >
                         {isSavingSettings ? (
                           <>
@@ -851,7 +875,7 @@ export const AdminModal: React.FC<AdminModalProps> = ({
                       </button>
 
                       {settingsSuccess && (
-                        <div className="mt-2.5 inline-flex items-center gap-1.5 text-xs text-emerald-600 font-bold bg-emerald-500/10 px-3 py-1.5 rounded-lg animate-in fade-in">
+                        <div className="mt-2.5 inline-flex items-center gap-1.5 text-xs text-emerald-600 font-bold bg-emerald-500/10 px-3 py-1.5 rounded-lg">
                           <CheckCircle2 className="w-4 h-4 shrink-0" />
                           <span>تم الحفظ ✓</span>
                         </div>
@@ -860,7 +884,7 @@ export const AdminModal: React.FC<AdminModalProps> = ({
                       {settingsError && (
                         <div
                           role="alert"
-                          className="mt-2.5 p-2.5 rounded-xl bg-red-500/15 border border-red-500/30 text-red-600 text-xs font-bold flex items-center gap-2 animate-shake"
+                          className="mt-2.5 p-2.5 rounded-xl bg-red-500/15 border border-red-500/30 text-red-600 text-xs font-bold flex items-center gap-2"
                         >
                           <AlertTriangle className="w-4 h-4 shrink-0" />
                           <span>{settingsError}</span>
@@ -871,7 +895,7 @@ export const AdminModal: React.FC<AdminModalProps> = ({
                 </section>
 
                 {/* Change Password Card */}
-                <section className="bg-[var(--card)] border border-[var(--line)] rounded-2xl p-4 sm:p-5 shadow-sm w-full max-w-full">
+                <section className="bg-[var(--card)] border border-[var(--line)] rounded-2xl p-4 sm:p-5 shadow-sm w-full max-w-full box-border overflow-hidden">
                   <h3 className="font-bold text-base mb-1 flex items-center gap-2">
                     <KeyRound className="w-4 h-4 text-[var(--gold)] shrink-0" />
                     <span>تغيير الرمز السري</span>
@@ -892,8 +916,8 @@ export const AdminModal: React.FC<AdminModalProps> = ({
                     </div>
                   )}
 
-                  <form onSubmit={handleChangePassword} className="space-y-3 w-full max-w-full">
-                    <div>
+                  <form onSubmit={handleChangePassword} className="space-y-3 w-full max-w-full box-border">
+                    <div className="w-full box-border">
                       <label className="block text-xs font-bold mb-1">
                         الرمز السري الجديد
                       </label>
@@ -903,13 +927,13 @@ export const AdminModal: React.FC<AdminModalProps> = ({
                         onChange={(e) => setNewAdminPassword(e.target.value)}
                         placeholder="أدخل 6 أحرف أو أرقام على الأقل"
                         style={{ fontSize: '16px' }}
-                        className="w-full px-3 py-2 rounded-xl border border-[var(--line)] bg-[var(--bg)] focus:outline-none focus:border-[var(--red)]"
+                        className="w-full box-border px-3 py-2 rounded-xl border border-[var(--line)] bg-[var(--bg)] focus:outline-none focus:border-[var(--red)]"
                       />
                     </div>
 
                     <button
                       type="submit"
-                      className="touch-btn px-5 py-2 rounded-xl border border-[var(--line)] bg-[var(--bg)] hover:bg-[var(--card)] font-bold text-xs transition-colors cursor-pointer"
+                      className="touch-btn px-5 py-2 rounded-xl border border-[var(--line)] bg-[var(--bg)] hover:bg-[var(--card)] font-bold text-xs transition-colors cursor-pointer max-w-full"
                     >
                       تحديث الرمز السري
                     </button>
@@ -917,7 +941,7 @@ export const AdminModal: React.FC<AdminModalProps> = ({
                 </section>
 
                 {/* Database Connection Status Card */}
-                <section className="bg-[var(--card)] border border-[var(--line)] rounded-2xl p-4 sm:p-5 shadow-sm w-full max-w-full">
+                <section className="bg-[var(--card)] border border-[var(--line)] rounded-2xl p-4 sm:p-5 shadow-sm w-full max-w-full box-border overflow-hidden">
                   <div className="flex items-center justify-between mb-2">
                     <h3 className="font-bold text-xs sm:text-sm flex items-center gap-2">
                       <Database className="w-4 h-4 text-[var(--red)] shrink-0" />
@@ -934,16 +958,16 @@ export const AdminModal: React.FC<AdminModalProps> = ({
                     )}
                   </div>
                   <p className="text-[11px] text-[var(--muted)] leading-relaxed">
-                    قواعد الأمان مفعلة: القراءة متاحة للجميع، والكتابة محصورة بمدير المتجر المعتمد.
+                    قواعد الأمان مفعلة: القراءة متاحة للجميع، والكتابة محصورة بمدير المتجر المعتمد (admin@hamdar-site.app).
                   </p>
                 </section>
 
                 {/* Logout Button */}
-                <div className="pt-1 text-center">
+                <div className="pt-1 text-center w-full box-border">
                   <button
                     type="button"
                     onClick={handleLogout}
-                    className="touch-btn px-5 py-2 rounded-xl border border-red-500/20 text-red-600 hover:bg-red-500/10 text-xs font-bold transition-colors inline-flex items-center gap-2 cursor-pointer"
+                    className="touch-btn px-5 py-2 rounded-xl border border-red-500/20 text-red-600 hover:bg-red-500/10 text-xs font-bold transition-colors inline-flex items-center gap-2 cursor-pointer max-w-full"
                   >
                     <LogOut className="w-4 h-4" />
                     <span>تسجيل الخروج من لوحة التحكم</span>
@@ -954,7 +978,7 @@ export const AdminModal: React.FC<AdminModalProps> = ({
           </div>
 
           {/* Sticky Bottom Bar */}
-          <footer className="sticky bottom-0 bg-[var(--card)] border-t border-[var(--line)] px-3 py-2 flex flex-wrap items-center justify-between gap-2 safe-bottom w-full max-w-full shrink-0">
+          <footer className="sticky bottom-0 bg-[var(--card)] border-t border-[var(--line)] px-3 py-2 flex flex-wrap items-center justify-between gap-2 safe-bottom w-full max-w-full shrink-0 box-border">
             <button
               onClick={handleLogout}
               className="touch-btn px-2.5 py-1 rounded-lg border border-red-500/20 text-red-600 hover:bg-red-500/10 text-xs font-bold transition-colors inline-flex items-center gap-1 cursor-pointer"
@@ -976,10 +1000,10 @@ export const AdminModal: React.FC<AdminModalProps> = ({
       {editingProduct && (
         <div
           dir="rtl"
-          className="fixed inset-0 z-60 bg-black/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 overflow-y-auto"
+          className="fixed inset-0 z-60 bg-black/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 overflow-y-auto w-full max-w-full box-border"
         >
-          <div className="w-full max-w-lg bg-[var(--card)] border border-[var(--line)] rounded-2xl p-4 sm:p-6 shadow-xl my-auto animate-in zoom-in-95 duration-150">
-            <div className="flex items-center justify-between pb-3 mb-4 border-b border-[var(--line)]">
+          <div className="w-full max-w-lg bg-[var(--card)] border border-[var(--line)] rounded-2xl p-4 sm:p-6 shadow-xl my-auto box-border overflow-hidden">
+            <div className="flex items-center justify-between pb-3 mb-4 border-b border-[var(--line)] w-full box-border">
               <h3 className="font-bold text-base flex items-center gap-2">
                 <Edit3 className="w-4 h-4 text-[var(--red)]" />
                 <span>تعديل المنتج</span>
@@ -987,18 +1011,18 @@ export const AdminModal: React.FC<AdminModalProps> = ({
               <button
                 type="button"
                 onClick={() => setEditingProduct(null)}
-                className="p-1 rounded-lg hover:bg-[var(--bg)] text-[var(--muted)] hover:text-[var(--ink)]"
+                className="p-1 rounded-lg hover:bg-[var(--bg)] text-[var(--muted)] hover:text-[var(--ink)] cursor-pointer"
               >
                 <X className="w-5 h-5" />
               </button>
             </div>
 
-            <form onSubmit={handleSaveEdit} className="space-y-4">
+            <form onSubmit={handleSaveEdit} className="space-y-4 w-full box-border">
               {/* Photo preview and replace button */}
-              <div>
+              <div className="w-full box-border">
                 <label className="block text-xs font-bold mb-1.5">صورة المنتج</label>
-                <div className="flex items-center gap-3">
-                  <div className="w-20 h-20 rounded-xl overflow-hidden border border-[var(--line)] bg-[var(--bg)] shrink-0 relative">
+                <div className="flex items-center gap-3 w-full box-border">
+                  <div className="w-20 h-20 rounded-xl overflow-hidden border border-[var(--line)] bg-[var(--bg)] shrink-0 relative box-border">
                     {editImageUrl ? (
                       <img
                         src={editImageUrl}
@@ -1011,7 +1035,7 @@ export const AdminModal: React.FC<AdminModalProps> = ({
                       </div>
                     )}
                   </div>
-                  <div className="space-y-1.5 flex-1 min-w-0">
+                  <div className="space-y-1.5 flex-1 min-w-0 box-border">
                     <input
                       ref={editFileInputRef}
                       type="file"
@@ -1022,16 +1046,16 @@ export const AdminModal: React.FC<AdminModalProps> = ({
                     <button
                       type="button"
                       onClick={() => editFileInputRef.current?.click()}
-                      className="touch-btn px-3 py-1.5 rounded-xl border border-[var(--line)] bg-[var(--bg)] hover:bg-[var(--card)] text-xs font-bold flex items-center gap-1.5 cursor-pointer"
+                      className="touch-btn px-3 py-1.5 rounded-xl border border-[var(--line)] bg-[var(--bg)] hover:bg-[var(--card)] text-xs font-bold flex items-center gap-1.5 cursor-pointer max-w-full"
                     >
                       <Upload className="w-3.5 h-3.5 text-[var(--red)]" />
-                      <span>استبدال الصورة</span>
+                      <span className="truncate">استبدال الصورة</span>
                     </button>
                     {editImageUrl && (
                       <button
                         type="button"
                         onClick={() => setEditImageUrl('')}
-                        className="text-[11px] text-red-500 hover:underline block"
+                        className="text-[11px] text-red-500 hover:underline block cursor-pointer"
                       >
                         حذف الصورة الحالية
                       </button>
@@ -1041,7 +1065,7 @@ export const AdminModal: React.FC<AdminModalProps> = ({
               </div>
 
               {/* Editable Name Ar */}
-              <div>
+              <div className="w-full box-border">
                 <label className="block text-xs font-bold mb-1">
                   الاسم بالعربية <span className="text-red-500">*</span>
                 </label>
@@ -1051,12 +1075,12 @@ export const AdminModal: React.FC<AdminModalProps> = ({
                   value={editNameAr}
                   onChange={(e) => setEditNameAr(e.target.value)}
                   style={{ fontSize: '16px' }}
-                  className="w-full px-3 py-2 rounded-xl border border-[var(--line)] bg-[var(--bg)] focus:outline-none focus:border-[var(--red)]"
+                  className="w-full box-border px-3 py-2 rounded-xl border border-[var(--line)] bg-[var(--bg)] focus:outline-none focus:border-[var(--red)]"
                 />
               </div>
 
               {/* Editable Name En */}
-              <div>
+              <div className="w-full box-border">
                 <label className="block text-xs font-bold mb-1">
                   الاسم بالإنجليزية (اختياري)
                 </label>
@@ -1066,12 +1090,12 @@ export const AdminModal: React.FC<AdminModalProps> = ({
                   value={editNameEn}
                   onChange={(e) => setEditNameEn(e.target.value)}
                   style={{ fontSize: '16px' }}
-                  className="w-full px-3 py-2 rounded-xl border border-[var(--line)] bg-[var(--bg)] focus:outline-none focus:border-[var(--red)] text-left"
+                  className="w-full box-border px-3 py-2 rounded-xl border border-[var(--line)] bg-[var(--bg)] focus:outline-none focus:border-[var(--red)] text-left"
                 />
               </div>
 
               {/* Editable Price */}
-              <div>
+              <div className="w-full box-border">
                 <label className="block text-xs font-bold mb-1">السعر ($)</label>
                 <input
                   type="text"
@@ -1080,12 +1104,12 @@ export const AdminModal: React.FC<AdminModalProps> = ({
                   onChange={(e) => setEditPrice(e.target.value)}
                   placeholder="مثال: 25 أو $25"
                   style={{ fontSize: '16px' }}
-                  className="w-full px-3 py-2 rounded-xl border border-[var(--line)] bg-[var(--bg)] focus:outline-none focus:border-[var(--red)] text-left"
+                  className="w-full box-border px-3 py-2 rounded-xl border border-[var(--line)] bg-[var(--bg)] focus:outline-none focus:border-[var(--red)] text-left"
                 />
               </div>
 
               {/* Actions & Feedback */}
-              <div className="pt-2 flex flex-wrap items-center justify-between gap-2 border-t border-[var(--line)]">
+              <div className="pt-2 flex flex-wrap items-center justify-between gap-2 border-t border-[var(--line)] w-full box-border">
                 <div className="flex items-center gap-2">
                   <button
                     type="submit"
@@ -1118,14 +1142,14 @@ export const AdminModal: React.FC<AdminModalProps> = ({
                 <button
                   type="button"
                   onClick={() => setEditingProduct(null)}
-                  className="touch-btn px-4 py-2 rounded-xl border border-[var(--line)] bg-[var(--bg)] hover:bg-[var(--card)] font-bold text-xs"
+                  className="touch-btn px-4 py-2 rounded-xl border border-[var(--line)] bg-[var(--bg)] hover:bg-[var(--card)] font-bold text-xs cursor-pointer"
                 >
                   إلغاء
                 </button>
               </div>
 
               {editSuccess && (
-                <div className="p-2 rounded-lg bg-emerald-500/10 text-emerald-600 text-xs font-bold flex items-center gap-1.5 animate-in fade-in">
+                <div className="p-2 rounded-lg bg-emerald-500/10 text-emerald-600 text-xs font-bold flex items-center gap-1.5">
                   <CheckCircle2 className="w-4 h-4 shrink-0" />
                   <span>تم الحفظ ✓</span>
                 </div>
@@ -1134,7 +1158,7 @@ export const AdminModal: React.FC<AdminModalProps> = ({
               {editError && (
                 <div
                   role="alert"
-                  className="p-2.5 rounded-lg bg-red-500/15 border border-red-500/30 text-red-600 text-xs font-bold flex items-center gap-1.5 animate-shake"
+                  className="p-2.5 rounded-lg bg-red-500/15 border border-red-500/30 text-red-600 text-xs font-bold flex items-center gap-1.5"
                 >
                   <AlertTriangle className="w-4 h-4 shrink-0" />
                   <span>{editError}</span>
