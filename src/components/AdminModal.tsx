@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   X,
   Upload,
@@ -25,11 +25,13 @@ import {
   ArrowUp,
   ArrowDown,
   Sparkles,
-  ShoppingBag,
   KeyRound,
+  Mail,
+  ShieldAlert,
 } from 'lucide-react';
 import { Product, SiteSettings, StoreType } from '../types';
 import {
+  ADMIN_EMAIL,
   addProduct,
   updateProduct,
   deleteProduct,
@@ -51,9 +53,6 @@ interface AdminModalProps {
   user: any;
 }
 
-const LOCKOUT_KEY = 'hamdar_admin_lockout_until';
-const ATTEMPTS_KEY = 'hamdar_admin_failed_attempts';
-
 function formatErrorMessage(err: any): string {
   if (!err) return 'حدث خطأ غير متوقع';
   const code = err.code || '';
@@ -63,21 +62,47 @@ function formatErrorMessage(err: any): string {
     return 'سجّل الدخول من جديد (auth/not-authenticated)';
   }
   if (code === 'permission-denied' || message.includes('permission-denied')) {
-    return 'ليس لديك صلاحية الكتابة (permission-denied). تأكد من تسجيل الدخول كمسؤول.';
+    return 'ليس لديك صلاحية الكتابة (permission-denied). يرجى التأكد من البريد الإلكتروني للمسؤول.';
   }
   if (code === 'deadline-exceeded' || message.includes('مهلة')) {
-    return 'انتهت مهلة الاتصال بالخادم (deadline-exceeded). تحقق من اتصال الإنترنت.';
+    return 'انتهت مهلة الاتصال بالخادم (20 ثانية). تحقق من اتصال الإنترنت.';
   }
   if (code === 'unavailable') {
     return 'الخدمة غير متوفرة حالياً (unavailable).';
-  }
-  if (message.includes('الرمز غلط') || code === 'auth/invalid-credential' || code === 'auth/wrong-password') {
-    return 'الرمز غلط';
   }
   if (code) {
     return `فشلت العملية (${code}): ${message}`;
   }
   return message || 'تعذر إتمام العملية';
+}
+
+function formatLoginErrorMessage(err: any): string {
+  if (!err) return 'فشل تسجيل الدخول';
+  const code = err.code || '';
+  const msg = err.message || String(err);
+
+  if (
+    code === 'auth/invalid-credential' ||
+    code === 'auth/wrong-password' ||
+    code === 'auth/user-not-found' ||
+    msg.includes('invalid-credential') ||
+    msg.includes('wrong-password')
+  ) {
+    return 'البريد الإلكتروني أو كلمة المرور غير صحيحة';
+  }
+  if (code === 'auth/invalid-email') {
+    return 'صيغة البريد الإلكتروني غير صحيحة';
+  }
+  if (code === 'auth/too-many-requests') {
+    return 'تم حظر المحاولات مؤقتاً بسبب تكرار الخطأ. يرجى الانتظار دقيقة والمحاولة مجدداً.';
+  }
+  if (code === 'auth/network-request-failed') {
+    return 'فشل الاتصال بالإنترنت. يرجى التحقق من الشبكة.';
+  }
+  if (code === 'deadline-exceeded') {
+    return 'انتهت مهلة تسجيل الدخول (20 ثانية). تحقق من اتصالك.';
+  }
+  return msg || 'البريد الإلكتروني أو كلمة المرور غير صحيحة';
 }
 
 function formatPasswordErrorMessage(err: any): string {
@@ -91,10 +116,10 @@ function formatPasswordErrorMessage(err: any): string {
     message.includes('الرمز الحالي غلط') ||
     message.includes('wrong-password')
   ) {
-    return 'الرمز الحالي غلط';
+    return 'الرمز الحالي غير صحيح';
   }
-  if (code === 'auth/too-many-requests' || message.includes('too-many-requests')) {
-    return 'محاولات كثيرة، جرّب بعد قليل';
+  if (code === 'auth/too-many-requests') {
+    return 'محاولات كثيرة، يرجى الانتظار قليلاً ثم المحاولة';
   }
   if (code === 'auth/not-authenticated' || message.includes('سجّل الدخول')) {
     return 'سجّل الدخول من جديد';
@@ -114,16 +139,103 @@ export const AdminModal: React.FC<AdminModalProps> = ({
 }) => {
   const [activeTab, setActiveTab] = useState<StoreType | 'settings'>('men');
 
-  // Single passcode auth
-  const [passcode, setPasscode] = useState('');
+  // Login form state (Always asked on modal open, no persistent session)
+  const [loginEmail, setLoginEmail] = useState(ADMIN_EMAIL);
+  const [loginPassword, setLoginPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [authError, setAuthError] = useState('');
   const [authLoading, setAuthLoading] = useState(false);
 
-  // Lockout state
-  const [lockoutSeconds, setLockoutSeconds] = useState(0);
+  // Inactivity & auto-logout ref
+  const inactivityTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Add product drawer / sheet
+  // Reset password field and errors whenever the modal opens
+  useEffect(() => {
+    if (isOpen) {
+      setLoginPassword('');
+      setAuthError('');
+    }
+  }, [isOpen]);
+
+  // Handle logout and close modal cleanly
+  const handlePerformLogout = useCallback(async () => {
+    try {
+      await adminLogout();
+    } catch (err) {
+      console.error('[AdminModal] Logout error:', err);
+    }
+  }, []);
+
+  // 1. Inactivity Logout: 5 minutes (300,000 ms) of inactivity
+  const resetInactivityTimer = useCallback(() => {
+    if (inactivityTimerRef.current) {
+      clearTimeout(inactivityTimerRef.current);
+    }
+    if (user && isOpen) {
+      inactivityTimerRef.current = setTimeout(() => {
+        handlePerformLogout();
+        setAuthError('تم تسجيل الخروج تلقائياً لعدم وجود نشاط لمدة 5 دقائق.');
+      }, 5 * 60 * 1000);
+    }
+  }, [user, isOpen, handlePerformLogout]);
+
+  useEffect(() => {
+    if (!user || !isOpen) {
+      if (inactivityTimerRef.current) {
+        clearTimeout(inactivityTimerRef.current);
+      }
+      return;
+    }
+
+    resetInactivityTimer();
+
+    const activityEvents = ['mousemove', 'keydown', 'pointerdown', 'touchstart', 'scroll'];
+    const handleActivity = () => resetInactivityTimer();
+
+    activityEvents.forEach((evt) => {
+      window.addEventListener(evt, handleActivity, { passive: true });
+    });
+
+    return () => {
+      activityEvents.forEach((evt) => {
+        window.removeEventListener(evt, handleActivity);
+      });
+      if (inactivityTimerRef.current) {
+        clearTimeout(inactivityTimerRef.current);
+      }
+    };
+  }, [user, isOpen, resetInactivityTimer]);
+
+  // 2. Auto sign out when hiding app or closing tab / leaving
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'hidden' && user) {
+        handlePerformLogout();
+      }
+    };
+
+    const handlePageHide = () => {
+      if (user) {
+        handlePerformLogout();
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('pagehide', handlePageHide);
+
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('pagehide', handlePageHide);
+    };
+  }, [user, handlePerformLogout]);
+
+  // 3. Auto sign out when closing the admin modal
+  const handleCloseModal = () => {
+    handlePerformLogout();
+    onClose();
+  };
+
+  // Add product form
   const [isAddOpen, setIsAddOpen] = useState(false);
   const [newNameAr, setNewNameAr] = useState('');
   const [newNameEn, setNewNameEn] = useState('');
@@ -136,7 +248,7 @@ export const AdminModal: React.FC<AdminModalProps> = ({
   const [addSuccess, setAddSuccess] = useState(false);
   const addFileInputRef = useRef<HTMLInputElement>(null);
 
-  // Quick edit modal state
+  // Edit product modal state
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
   const [editNameAr, setEditNameAr] = useState('');
   const [editNameEn, setEditNameEn] = useState('');
@@ -175,7 +287,7 @@ export const AdminModal: React.FC<AdminModalProps> = ({
   const [passwordError, setPasswordError] = useState('');
   const [passwordSuccess, setPasswordSuccess] = useState(false);
 
-  // Lock body scroll whenever admin modal is open to eliminate iOS bounce
+  // Lock body scroll whenever admin modal is open
   useEffect(() => {
     if (isOpen) {
       document.body.classList.add('admin-open');
@@ -195,31 +307,17 @@ export const AdminModal: React.FC<AdminModalProps> = ({
     setHeroImageBase64(settings.heroImage || '');
   }, [settings]);
 
-  // Check lockout on mount and interval
-  useEffect(() => {
-    const checkLockout = () => {
-      const until = parseInt(localStorage.getItem(LOCKOUT_KEY) || '0', 10);
-      const remaining = Math.max(0, Math.ceil((until - Date.now()) / 1000));
-      setLockoutSeconds(remaining);
-      if (remaining === 0 && until > 0) {
-        localStorage.removeItem(LOCKOUT_KEY);
-        localStorage.removeItem(ATTEMPTS_KEY);
-      }
-    };
-
-    checkLockout();
-    const interval = setInterval(checkLockout, 1000);
-    return () => clearInterval(interval);
-  }, []);
-
   if (!isOpen) return null;
 
-  // Handle Passcode Login
-  const handleLogin = async (e: React.FormEvent) => {
+  // Handle Admin Login with Email & Password
+  const handleLoginSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (lockoutSeconds > 0) return;
-    if (!passcode.trim()) {
-      setAuthError('يرجى إدخال الرمز السري');
+    if (!loginEmail.trim()) {
+      setAuthError('يرجى إدخال البريد الإلكتروني');
+      return;
+    }
+    if (!loginPassword.trim()) {
+      setAuthError('يرجى إدخال كلمة المرور');
       return;
     }
 
@@ -227,35 +325,13 @@ export const AdminModal: React.FC<AdminModalProps> = ({
     setAuthError('');
 
     try {
-      await adminLogin(passcode.trim());
-      // reset attempts on success
-      localStorage.removeItem(ATTEMPTS_KEY);
-      localStorage.removeItem(LOCKOUT_KEY);
-      setPasscode('');
-    } catch {
-      // Failed attempt
-      const attempts = parseInt(localStorage.getItem(ATTEMPTS_KEY) || '0', 10) + 1;
-      localStorage.setItem(ATTEMPTS_KEY, attempts.toString());
-
-      if (attempts >= 5) {
-        const lockoutUntil = Date.now() + 60 * 1000;
-        localStorage.setItem(LOCKOUT_KEY, lockoutUntil.toString());
-        setLockoutSeconds(60);
-        setAuthError('تم حظر المحاولات لمدة 60 ثانية بسبب تكرار الخطأ.');
-      } else {
-        const remainingAttempts = 5 - attempts;
-        setAuthError(`الرمز غلط (تبقى ${remainingAttempts} محاولات)`);
-      }
+      await adminLogin(loginEmail.trim(), loginPassword.trim());
+      setLoginPassword('');
+    } catch (err: any) {
+      console.error('[AdminModal] Login error:', err);
+      setAuthError(formatLoginErrorMessage(err));
     } finally {
       setAuthLoading(false);
-    }
-  };
-
-  const handleLogout = async () => {
-    try {
-      await adminLogout();
-    } catch (err) {
-      console.error(err);
     }
   };
 
@@ -276,7 +352,7 @@ export const AdminModal: React.FC<AdminModalProps> = ({
     }
   };
 
-  // Save new product
+  // Save new product to Firestore
   const handleAddProduct = async (e: React.FormEvent) => {
     e.preventDefault();
     setAddError('');
@@ -295,22 +371,24 @@ export const AdminModal: React.FC<AdminModalProps> = ({
     setIsAdding(true);
     try {
       const cleanPrice = newPrice.trim().replace('$', '');
-      // If English name is empty, fall back to Arabic name
       const finalEnName = newNameEn.trim() || newNameAr.trim();
+
+      const storeProducts = products.filter((p) => p.store === activeTab);
+      const maxOrder = storeProducts.reduce((max, p) => Math.max(max, p.order ?? 0), 0);
 
       await addProduct({
         store: activeTab === 'settings' ? 'men' : activeTab,
         nameAr: newNameAr.trim(),
         nameEn: finalEnName,
-        category: newCategory.trim() || undefined,
-        price: cleanPrice || undefined,
-        imageUrl: newImageBase64 || undefined,
+        category: newCategory.trim(),
+        price: cleanPrice,
+        imageUrl: newImageBase64,
         soldOut: false,
         hidden: false,
+        order: maxOrder + 1,
       });
 
       setAddSuccess(true);
-      // Reset form
       setNewNameAr('');
       setNewNameEn('');
       setNewCategory('');
@@ -321,7 +399,7 @@ export const AdminModal: React.FC<AdminModalProps> = ({
       setTimeout(() => {
         setAddSuccess(false);
         setIsAddOpen(false);
-      }, 1500);
+      }, 2000);
     } catch (err: any) {
       setAddError(formatErrorMessage(err));
     } finally {
@@ -330,18 +408,18 @@ export const AdminModal: React.FC<AdminModalProps> = ({
   };
 
   // Open Edit Product Drawer
-  const openEditModal = (p: Product) => {
-    setEditingProduct(p);
-    setEditNameAr(p.nameAr || '');
-    setEditNameEn(p.nameEn || '');
-    setEditCategory(p.category || '');
-    setEditPrice(p.price || '');
-    setEditImageBase64(p.imageUrl || '');
+  const handleOpenEdit = (product: Product) => {
+    setEditingProduct(product);
+    setEditNameAr(product.nameAr);
+    setEditNameEn(product.nameEn || '');
+    setEditCategory(product.category || '');
+    setEditPrice(product.price || '');
+    setEditImageBase64(product.imageUrl || '');
     setEditError('');
     setEditSuccess(false);
   };
 
-  // Edit Image handler
+  // Edit Product Photo Handler
   const handleEditImageChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -352,13 +430,13 @@ export const AdminModal: React.FC<AdminModalProps> = ({
       const base64 = await compressImageToBase64(file);
       setEditImageBase64(base64);
     } catch (err: any) {
-      setEditError(err.message || 'تعذر معالجة الصورة');
+      setEditError(err.message || 'تعذر ضغط الصورة');
     } finally {
       setIsCompressingEdit(false);
     }
   };
 
-  // Save edited product
+  // Save Edit Product to Firestore
   const handleSaveEdit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingProduct) return;
@@ -378,19 +456,21 @@ export const AdminModal: React.FC<AdminModalProps> = ({
     setIsSavingEdit(true);
     try {
       const cleanPrice = editPrice.trim().replace('$', '');
+      const finalEnName = editNameEn.trim() || editNameAr.trim();
+
       await updateProduct(editingProduct.id, {
         nameAr: editNameAr.trim(),
-        nameEn: editNameEn.trim() || editNameAr.trim(),
-        category: editCategory.trim() || undefined,
-        price: cleanPrice || undefined,
-        imageUrl: editImageBase64 || undefined,
+        nameEn: finalEnName,
+        category: editCategory.trim(),
+        price: cleanPrice,
+        imageUrl: editImageBase64,
       });
 
       setEditSuccess(true);
       setTimeout(() => {
         setEditSuccess(false);
         setEditingProduct(null);
-      }, 1500);
+      }, 2000);
     } catch (err: any) {
       setEditError(formatErrorMessage(err));
     } finally {
@@ -398,16 +478,12 @@ export const AdminModal: React.FC<AdminModalProps> = ({
     }
   };
 
-  // Delete product
-  const handleDeleteProduct = async () => {
-    if (!editingProduct) return;
-    const confirmed = window.confirm(`هل أنت متأكد من حذف "${editingProduct.nameAr}"؟`);
-    if (!confirmed) return;
-
+  // Delete Product
+  const handleDeleteProduct = async (id: string) => {
+    if (!window.confirm('هل أنت متأكد من حذف هذا المنتج نهائياً من قاعدة البيانات؟')) return;
     setIsDeleting(true);
-    setEditError('');
     try {
-      await deleteProduct(editingProduct.id);
+      await deleteProduct(id);
       setEditingProduct(null);
     } catch (err: any) {
       setEditError(formatErrorMessage(err));
@@ -416,41 +492,44 @@ export const AdminModal: React.FC<AdminModalProps> = ({
     }
   };
 
-  // Quick SoldOut Toggle
-  const handleToggleSoldOut = async (p: Product) => {
-    setTogglingId(p.id);
+  // Quick toggle Sold Out
+  const handleToggleSoldOut = async (product: Product, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setTogglingId(product.id);
     try {
-      await updateProduct(p.id, { soldOut: !p.soldOut });
-    } catch (err) {
-      console.error(err);
+      await updateProduct(product.id, { soldOut: !product.soldOut });
+    } catch (err: any) {
+      alert(formatErrorMessage(err));
     } finally {
       setTogglingId(null);
     }
   };
 
-  // Quick Hidden Toggle
-  const handleToggleHidden = async (p: Product) => {
-    setTogglingId(p.id);
+  // Quick toggle Hidden
+  const handleToggleHidden = async (product: Product, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setTogglingId(product.id);
     try {
-      await updateProduct(p.id, { hidden: !p.hidden });
-    } catch (err) {
-      console.error(err);
+      await updateProduct(product.id, { hidden: !product.hidden });
+    } catch (err: any) {
+      alert(formatErrorMessage(err));
     } finally {
       setTogglingId(null);
     }
   };
 
-  // Quick Reorder
-  const handleReorder = async (productId: string, direction: 'up' | 'down') => {
-    if (activeTab === 'settings') return;
+  // Reorder product up / down
+  const handleReorder = async (product: Product, direction: 'up' | 'down', e: React.MouseEvent) => {
+    e.stopPropagation();
     try {
-      await reorderProducts(productId, direction, activeTab);
-    } catch (err) {
-      console.error(err);
+      const storeList = products.filter((p) => p.store === product.store);
+      await reorderProducts(product.id, direction, storeList);
+    } catch (err: any) {
+      alert(formatErrorMessage(err));
     }
   };
 
-  // Hero background image upload in settings
+  // Settings Hero Image compression
   const handleHeroImageChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -461,13 +540,13 @@ export const AdminModal: React.FC<AdminModalProps> = ({
       const base64 = await compressImageToBase64(file);
       setHeroImageBase64(base64);
     } catch (err: any) {
-      setSettingsError(err.message || 'تعذر معالجة صورة الواجهة');
+      setSettingsError(err.message || 'تعذر ضغط صورة الواجهة');
     } finally {
       setIsCompressingHero(false);
     }
   };
 
-  // Save Settings
+  // Save Settings to Firestore
   const handleSaveSettings = async (e: React.FormEvent) => {
     e.preventDefault();
     setSettingsError('');
@@ -487,7 +566,7 @@ export const AdminModal: React.FC<AdminModalProps> = ({
         heroImage: heroImageBase64 || '',
       });
       setSettingsSuccess(true);
-      setTimeout(() => setSettingsSuccess(false), 2500);
+      setTimeout(() => setSettingsSuccess(false), 2000);
     } catch (err: any) {
       setSettingsError(formatErrorMessage(err));
     } finally {
@@ -495,7 +574,7 @@ export const AdminModal: React.FC<AdminModalProps> = ({
     }
   };
 
-  // Handle Admin Password Change
+  // Change Admin Password in Firebase Auth
   const handleChangePassword = async (e: React.FormEvent) => {
     e.preventDefault();
     setPasswordError('');
@@ -512,7 +591,7 @@ export const AdminModal: React.FC<AdminModalProps> = ({
     }
 
     if (newPassword.length < 6) {
-      setPasswordError('الرمز الجديد يجب أن يتكون من 6 أحرف على الأقل (يُفضل 8 أحرف وأكثر)');
+      setPasswordError('الرمز الجديد يجب أن يتكون من 6 أحرف على الأقل');
       return;
     }
 
@@ -533,7 +612,7 @@ export const AdminModal: React.FC<AdminModalProps> = ({
       setCurrentPassword('');
       setNewPassword('');
       setConfirmPassword('');
-      setTimeout(() => setPasswordSuccess(false), 3500);
+      setTimeout(() => setPasswordSuccess(false), 3000);
     } catch (err: any) {
       setPasswordError(formatPasswordErrorMessage(err));
     } finally {
@@ -541,7 +620,7 @@ export const AdminModal: React.FC<AdminModalProps> = ({
     }
   };
 
-  // Products filtered for active tab
+  // Store products
   const currentStoreProducts =
     activeTab !== 'settings'
       ? products
@@ -564,7 +643,7 @@ export const AdminModal: React.FC<AdminModalProps> = ({
       }}
       dir="rtl"
     >
-      {/* 1. Header Bar: wrapped & touch-friendly for 375px */}
+      {/* 1. Header Bar with visible "تسجيل الخروج" button */}
       <header className="sticky top-0 z-20 bg-[var(--dark)] border-b border-[var(--line)]/30 px-3.5 py-3 flex items-center justify-between gap-2 max-w-full">
         <div className="flex items-center gap-2 min-w-0">
           <div className="w-8 h-8 rounded-lg bg-[var(--red)]/20 text-[var(--red)] flex items-center justify-center shrink-0">
@@ -576,7 +655,7 @@ export const AdminModal: React.FC<AdminModalProps> = ({
             </h1>
             <p className="text-[11px] text-[var(--gold)] truncate flex items-center gap-1">
               <Database className="w-2.5 h-2.5" />
-              <span>{isFirebaseLiveMode() ? 'قاعدة بيانات سحابية متصلة' : 'وضع محلي'}</span>
+              <span>قاعدة بيانات فايربيس السحابية</span>
             </p>
           </div>
         </div>
@@ -584,19 +663,19 @@ export const AdminModal: React.FC<AdminModalProps> = ({
         <div className="flex items-center gap-2 shrink-0">
           {user && (
             <button
-              onClick={handleLogout}
-              className="touch-btn px-2.5 py-1.5 rounded-lg border border-red-500/30 text-red-400 hover:bg-red-500/10 text-xs font-semibold flex items-center gap-1 transition-colors cursor-pointer"
+              onClick={handlePerformLogout}
+              className="touch-btn px-3 py-1.5 rounded-lg bg-red-600/20 hover:bg-red-600/30 border border-red-500/40 text-red-300 text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer"
               title="تسجيل الخروج"
             >
-              <LogOut className="w-3.5 h-3.5" />
-              <span className="hidden xs:inline">تسجيل الخروج</span>
+              <LogOut className="w-3.5 h-3.5 text-red-400" />
+              <span>تسجيل الخروج</span>
             </button>
           )}
 
           <button
-            onClick={onClose}
+            onClick={handleCloseModal}
             className="touch-btn w-9 h-9 rounded-lg bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition-colors cursor-pointer"
-            aria-label="إغلاق"
+            aria-label="إغلاق لوحة التحكم"
           >
             <X className="w-5 h-5" />
           </button>
@@ -605,35 +684,67 @@ export const AdminModal: React.FC<AdminModalProps> = ({
 
       {/* 2. Content Body */}
       <main className="flex-1 max-w-3xl w-full mx-auto p-3.5 sm:p-6 pb-24">
-        {/* If NOT logged in: Single Passcode Gate */}
+        {/* If NOT logged in: Email + Password Screen (never persistent session) */}
         {!user ? (
-          <div className="max-w-sm mx-auto my-12 bg-[var(--card)] border border-[var(--line)] rounded-2xl p-6 sm:p-8 text-center shadow-2xl">
+          <div className="max-w-sm mx-auto my-8 bg-[var(--card)] border border-[var(--line)] rounded-2xl p-6 sm:p-8 text-center shadow-2xl">
             <div className="w-16 h-16 rounded-full bg-[var(--red)]/10 text-[var(--red)] mx-auto flex items-center justify-center mb-5">
               <Lock className="w-8 h-8" />
             </div>
 
-            <h2 className="text-xl font-bold mb-2 text-[var(--ink)]">تسجيل الدخول للإدارة</h2>
+            <h2 className="text-xl font-bold mb-1.5 text-[var(--ink)]">تسجيل الدخول للإدارة</h2>
             <p className="text-xs text-[var(--muted)] mb-6">
-              أدخل الرمز السري الخاص بمتجر حمدر للمتابعة
+              أدخل بيانات حساب المسؤول للوصول إلى لوحة التحكم
             </p>
 
-            <form onSubmit={handleLogin} className="space-y-4">
-              <div className="relative text-right">
+            <form onSubmit={handleLoginSubmit} className="space-y-4 text-right">
+              {/* Email Field */}
+              <div>
                 <label className="block text-xs font-bold text-[var(--ink)] mb-1.5">
-                  الرمز السري
+                  البريد الإلكتروني
+                </label>
+                <div className="relative">
+                  <input
+                    type="email"
+                    required
+                    autoComplete="off"
+                    autoCorrect="off"
+                    autoCapitalize="none"
+                    spellCheck="false"
+                    value={loginEmail}
+                    onChange={(e) => {
+                      setLoginEmail(e.target.value);
+                      if (authError) setAuthError('');
+                    }}
+                    placeholder="admin@hamdar-site.app"
+                    dir="ltr"
+                    className="w-full h-11 px-3.5 ps-10 rounded-xl border border-[var(--line)] bg-[var(--bg)] text-[var(--ink)] text-sm focus:border-[var(--red)] focus:ring-1 focus:ring-[var(--red)] focus:outline-none transition-all"
+                  />
+                  <Mail className="w-4 h-4 text-[var(--muted)] absolute start-3 top-3.5 pointer-events-none" />
+                </div>
+              </div>
+
+              {/* Password Field */}
+              <div>
+                <label className="block text-xs font-bold text-[var(--ink)] mb-1.5">
+                  كلمة المرور
                 </label>
                 <div className="relative">
                   <input
                     type={showPassword ? 'text' : 'password'}
-                    value={passcode}
-                    disabled={lockoutSeconds > 0 || authLoading}
+                    required
+                    autoComplete="off"
+                    autoCorrect="off"
+                    autoCapitalize="none"
+                    spellCheck="false"
+                    value={loginPassword}
+                    disabled={authLoading}
                     onChange={(e) => {
-                      setPasscode(e.target.value);
+                      setLoginPassword(e.target.value);
                       if (authError) setAuthError('');
                     }}
                     placeholder="••••••••"
                     dir="ltr"
-                    className="w-full h-12 px-4 pe-11 rounded-xl border border-[var(--line)] bg-[var(--bg)] text-[var(--ink)] font-mono text-base focus:border-[var(--red)] focus:ring-1 focus:ring-[var(--red)] focus:outline-none transition-all disabled:opacity-50"
+                    className="w-full h-11 px-3.5 pe-10 rounded-xl border border-[var(--line)] bg-[var(--bg)] text-[var(--ink)] text-sm focus:border-[var(--red)] focus:ring-1 focus:ring-[var(--red)] focus:outline-none transition-all disabled:opacity-50"
                   />
                   <button
                     type="button"
@@ -646,26 +757,22 @@ export const AdminModal: React.FC<AdminModalProps> = ({
                 </div>
               </div>
 
+              {/* Error Message */}
               {authError && (
-                <div className="p-2.5 rounded-lg bg-red-500/10 border border-red-500/20 text-red-500 text-xs text-center font-bold animate-in fade-in">
-                  {authError}
-                </div>
-              )}
-
-              {lockoutSeconds > 0 && (
-                <div className="p-2.5 rounded-lg bg-amber-500/10 border border-amber-500/20 text-amber-500 text-xs text-center font-bold">
-                  محظور مؤقتاً: انتظر {lockoutSeconds} ثانية
+                <div className="p-3 rounded-xl bg-red-500/10 border border-red-500/20 text-red-500 text-xs text-center font-bold flex items-center justify-center gap-2 animate-in fade-in">
+                  <ShieldAlert className="w-4 h-4 shrink-0" />
+                  <span>{authError}</span>
                 </div>
               )}
 
               <button
                 type="submit"
-                disabled={lockoutSeconds > 0 || authLoading}
-                className="touch-btn w-full h-12 rounded-xl bg-[var(--red)] hover:bg-[#a31117] text-white font-bold text-base transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50 shadow-md"
+                disabled={authLoading}
+                className="touch-btn w-full h-12 rounded-xl bg-[var(--red)] hover:bg-[#a61217] text-white font-bold text-base transition-all flex items-center justify-center gap-2 cursor-pointer shadow-md disabled:opacity-50 mt-2"
               >
                 {authLoading ? (
                   <>
-                    <Loader2 className="w-4 h-4 animate-spin" />
+                    <Loader2 className="w-5 h-5 animate-spin" />
                     <span>جاري التحقق...</span>
                   </>
                 ) : (
@@ -673,100 +780,92 @@ export const AdminModal: React.FC<AdminModalProps> = ({
                 )}
               </button>
             </form>
+
+            <div className="mt-5 pt-4 border-t border-[var(--line)] text-center">
+              <span className="text-[11px] text-[var(--muted)]">
+                جلسة الإدارة مؤقتة وتنتهي تلقائياً عند إغلاق اللوحة أو عدم النشاط.
+              </span>
+            </div>
           </div>
         ) : (
-          /* LOGGED IN VIEW */
-          <div className="space-y-5">
-            {/* 3 Equal Tabs: Men / Women / Settings */}
-            <div className="grid grid-cols-3 gap-1.5 p-1 rounded-xl bg-black/40 border border-white/10 w-full text-center">
+          /* Logged In View */
+          <div className="space-y-4">
+            {/* 3 Equal Tabs row for 375px */}
+            <div className="grid grid-cols-3 gap-1.5 p-1 bg-[var(--card)] rounded-xl border border-[var(--line)] text-center text-xs font-bold">
               <button
-                onClick={() => {
-                  setActiveTab('men');
-                  setIsAddOpen(false);
-                }}
-                className={`touch-btn py-2.5 px-1 rounded-lg text-xs sm:text-sm font-bold transition-all truncate flex items-center justify-center gap-1 ${
+                onClick={() => setActiveTab('men')}
+                className={`touch-btn py-2.5 px-1 rounded-lg transition-all flex items-center justify-center gap-1 cursor-pointer truncate ${
                   activeTab === 'men'
-                    ? 'bg-[var(--red)] text-white shadow-sm'
-                    : 'text-neutral-400 hover:text-white'
+                    ? 'bg-[var(--red)] text-white shadow-xs'
+                    : 'text-[var(--muted)] hover:text-[var(--ink)]'
                 }`}
               >
-                <span>رجالي</span>
-                <span className="text-[10px] opacity-75">({menCount})</span>
+                <span className="truncate">رجالي ({menCount})</span>
               </button>
 
               <button
-                onClick={() => {
-                  setActiveTab('women');
-                  setIsAddOpen(false);
-                }}
-                className={`touch-btn py-2.5 px-1 rounded-lg text-xs sm:text-sm font-bold transition-all truncate flex items-center justify-center gap-1 ${
+                onClick={() => setActiveTab('women')}
+                className={`touch-btn py-2.5 px-1 rounded-lg transition-all flex items-center justify-center gap-1 cursor-pointer truncate ${
                   activeTab === 'women'
-                    ? 'bg-[var(--red)] text-white shadow-sm'
-                    : 'text-neutral-400 hover:text-white'
+                    ? 'bg-[var(--red)] text-white shadow-xs'
+                    : 'text-[var(--muted)] hover:text-[var(--ink)]'
                 }`}
               >
-                <span>نسائي</span>
-                <span className="text-[10px] opacity-75">({womenCount})</span>
+                <span className="truncate">نسائي ({womenCount})</span>
               </button>
 
               <button
-                onClick={() => {
-                  setActiveTab('settings');
-                  setIsAddOpen(false);
-                }}
-                className={`touch-btn py-2.5 px-1 rounded-lg text-xs sm:text-sm font-bold transition-all truncate ${
+                onClick={() => setActiveTab('settings')}
+                className={`touch-btn py-2.5 px-1 rounded-lg transition-all flex items-center justify-center gap-1 cursor-pointer truncate ${
                   activeTab === 'settings'
-                    ? 'bg-[var(--red)] text-white shadow-sm'
-                    : 'text-neutral-400 hover:text-white'
+                    ? 'bg-[var(--red)] text-white shadow-xs'
+                    : 'text-[var(--muted)] hover:text-[var(--ink)]'
                 }`}
               >
-                <span>إعدادات</span>
+                <span className="truncate">الإعدادات</span>
               </button>
             </div>
 
-            {/* TAB CONTENT: PRODUCTS (MEN / WOMEN) */}
+            {/* PRODUCT TABS (Men or Women) */}
             {activeTab !== 'settings' && (
               <div className="space-y-4">
-                {/* Add Product Toggle Button */}
+                {/* Add Product Button */}
                 <button
-                  onClick={() => setIsAddOpen(!isAddOpen)}
-                  className={`touch-btn w-full py-3.5 px-4 rounded-xl font-bold text-sm flex items-center justify-center gap-2 border transition-all cursor-pointer ${
-                    isAddOpen
-                      ? 'bg-neutral-800 text-white border-white/20'
-                      : 'bg-emerald-600 hover:bg-emerald-700 text-white border-emerald-500 shadow-md'
-                  }`}
+                  onClick={() => setIsAddOpen(true)}
+                  className="touch-btn w-full py-3.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-sm flex items-center justify-center gap-2 shadow-md transition-all cursor-pointer"
                 >
-                  {isAddOpen ? (
-                    <>
-                      <X className="w-4 h-4" />
-                      <span>إلغاء الإضافة</span>
-                    </>
-                  ) : (
-                    <>
-                      <Plus className="w-4 h-4" />
-                      <span>إضافة منتج جديد ({activeTab === 'men' ? 'رجالي' : 'نسائي'})</span>
-                    </>
-                  )}
+                  <Plus className="w-5 h-5" />
+                  <span>
+                    إضافة منتج جديد ({activeTab === 'men' ? 'قسم رجالي' : 'قسم نسائي'})
+                  </span>
                 </button>
 
-                {/* ADD PRODUCT BOTTOM SHEET / DRAWER */}
+                {/* Add Product Drawer */}
                 {isAddOpen && (
-                  <div className="bg-[var(--card)] border border-[var(--line)] rounded-2xl p-4 sm:p-5 shadow-xl animate-in fade-in slide-in-from-top-3 duration-200">
-                    <h3 className="text-base font-bold text-[var(--ink)] mb-4 flex items-center gap-2">
-                      <ShoppingBag className="w-4 h-4 text-[var(--red)]" />
-                      <span>إضافة منتج جديد لـ {activeTab === 'men' ? 'حمدر رجالي' : 'حمدر نسائي'}</span>
-                    </h3>
+                  <div className="bg-[var(--card)] border border-[var(--line)] rounded-2xl p-4 sm:p-5 space-y-4 shadow-xl animate-in slide-in-from-top-3 duration-200">
+                    <div className="flex items-center justify-between border-b border-[var(--line)] pb-2.5">
+                      <h3 className="font-bold text-sm text-[var(--ink)] flex items-center gap-2">
+                        <Plus className="w-4 h-4 text-emerald-500" />
+                        <span>إضافة منتج جديد</span>
+                      </h3>
+                      <button
+                        onClick={() => setIsAddOpen(false)}
+                        className="p-1 rounded-lg hover:bg-[var(--bg)] text-[var(--muted)]"
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+                    </div>
 
-                    <form onSubmit={handleAddProduct} className="space-y-4">
-                      {/* Photo Picker */}
+                    <form onSubmit={handleAddProduct} className="space-y-3.5">
+                      {/* Photo Upload with client compression */}
                       <div>
-                        <label className="block text-xs font-bold text-[var(--ink)] mb-2">
-                          صورة المنتج (اختياري)
+                        <label className="block text-xs font-bold text-[var(--ink)] mb-1.5">
+                          صورة المنتج (تُضغط وتُحفظ في قاعدة البيانات)
                         </label>
                         <div className="flex items-center gap-3">
-                          <div className="w-20 h-20 rounded-xl border-2 border-dashed border-[var(--line)] overflow-hidden bg-[var(--bg)] flex items-center justify-center relative shrink-0">
+                          <div className="w-16 h-20 rounded-lg overflow-hidden bg-[var(--bg)] border border-[var(--line)] shrink-0 flex items-center justify-center relative">
                             {isCompressingNew ? (
-                              <Loader2 className="w-6 h-6 animate-spin text-[var(--muted)]" />
+                              <Loader2 className="w-5 h-5 animate-spin text-[var(--muted)]" />
                             ) : newImageBase64 ? (
                               <img
                                 src={newImageBase64}
@@ -774,11 +873,11 @@ export const AdminModal: React.FC<AdminModalProps> = ({
                                 className="w-full h-full object-cover"
                               />
                             ) : (
-                              <ImageIcon className="w-6 h-6 text-[var(--muted)] opacity-50" />
+                              <ImageIcon className="w-6 h-6 text-[var(--muted)]/40" />
                             )}
                           </div>
 
-                          <div className="space-y-1.5 flex-1 min-w-0">
+                          <div className="space-y-1 flex-1">
                             <input
                               type="file"
                               ref={addFileInputRef}
@@ -789,10 +888,10 @@ export const AdminModal: React.FC<AdminModalProps> = ({
                             />
                             <label
                               htmlFor="add-product-photo"
-                              className="touch-btn inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-[var(--bg)] border border-[var(--line)] hover:border-[var(--muted)] text-xs font-bold text-[var(--ink)] cursor-pointer"
+                              className="touch-btn inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[var(--bg)] border border-[var(--line)] text-xs font-bold text-[var(--ink)] cursor-pointer hover:border-[var(--muted)]"
                             >
                               <Upload className="w-3.5 h-3.5" />
-                              <span>اختر صورة من الهاتف</span>
+                              <span>{newImageBase64 ? 'تغيير الصورة' : 'اختيار صورة'}</span>
                             </label>
 
                             {newImageBase64 && (
@@ -804,51 +903,47 @@ export const AdminModal: React.FC<AdminModalProps> = ({
                                 }}
                                 className="block text-[11px] text-red-500 hover:underline cursor-pointer"
                               >
-                                حذف الصورة
+                                إزالة الصورة
                               </button>
                             )}
                             <p className="text-[10px] text-[var(--muted)]">
-                              تُضغط الصورة تلقائياً لسرعة فائقة (أقل من 150KB)
+                              يتم ضغط الصورة تلقائياً لأقصى عرض 800 بكسل بجودة عالية.
                             </p>
                           </div>
                         </div>
                       </div>
 
-                      {/* Arabic Name (Required) */}
-                      <div>
-                        <label className="block text-xs font-bold text-[var(--ink)] mb-1">
-                          اسم المنتج بالعربية <span className="text-[var(--red)]">*</span>
-                        </label>
-                        <input
-                          type="text"
-                          required
-                          value={newNameAr}
-                          onChange={(e) => setNewNameAr(e.target.value)}
-                          placeholder="مثال: قميص كتان تركي كحلي"
-                          className="w-full h-11 px-3 rounded-xl border border-[var(--line)] bg-[var(--bg)] text-[var(--ink)] text-base focus:border-[var(--red)] focus:outline-none"
-                        />
-                      </div>
-
-                      {/* English Name (Optional) */}
-                      <div>
-                        <label className="block text-xs font-bold text-[var(--ink)] mb-1">
-                          الاسم بالإنجليزية (اختياري)
-                        </label>
-                        <input
-                          type="text"
-                          value={newNameEn}
-                          onChange={(e) => setNewNameEn(e.target.value)}
-                          placeholder="مثال: Navy Turkish Linen Shirt"
-                          dir="ltr"
-                          className="w-full h-11 px-3 rounded-xl border border-[var(--line)] bg-[var(--bg)] text-[var(--ink)] text-base focus:border-[var(--red)] focus:outline-none"
-                        />
-                        <p className="text-[10px] text-[var(--muted)] mt-1">
-                          إذا تركته فارغاً، سيتم استخدام الاسم العربي تلقائياً.
-                        </p>
-                      </div>
-
-                      {/* Category & Price Grid */}
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div>
+                          <label className="block text-xs font-bold text-[var(--ink)] mb-1">
+                            الاسم بالعربية <span className="text-[var(--red)]">*</span>
+                          </label>
+                          <input
+                            type="text"
+                            required
+                            value={newNameAr}
+                            onChange={(e) => setNewNameAr(e.target.value)}
+                            placeholder="مثال: قميص صيفي فاخر"
+                            className="w-full h-10 px-3 rounded-lg border border-[var(--line)] bg-[var(--bg)] text-[var(--ink)] text-xs focus:border-[var(--red)] focus:outline-none"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block text-xs font-bold text-[var(--ink)] mb-1">
+                            الاسم بالإنجليزية (اختياري)
+                          </label>
+                          <input
+                            type="text"
+                            value={newNameEn}
+                            onChange={(e) => setNewNameEn(e.target.value)}
+                            placeholder="Classic Summer Shirt"
+                            dir="ltr"
+                            className="w-full h-10 px-3 rounded-lg border border-[var(--line)] bg-[var(--bg)] text-[var(--ink)] text-xs focus:border-[var(--red)] focus:outline-none"
+                          />
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-3">
                         <div>
                           <label className="block text-xs font-bold text-[var(--ink)] mb-1">
                             التصنيف (اختياري)
@@ -857,470 +952,453 @@ export const AdminModal: React.FC<AdminModalProps> = ({
                             type="text"
                             value={newCategory}
                             onChange={(e) => setNewCategory(e.target.value)}
-                            placeholder={activeTab === 'men' ? 'مثال: قمصان، بدلات' : 'مثال: فساتين، أطقم'}
-                            className="w-full h-11 px-3 rounded-xl border border-[var(--line)] bg-[var(--bg)] text-[var(--ink)] text-base focus:border-[var(--red)] focus:outline-none"
+                            placeholder="قمصان، أحذية، كنزات..."
+                            className="w-full h-10 px-3 rounded-lg border border-[var(--line)] bg-[var(--bg)] text-[var(--ink)] text-xs focus:border-[var(--red)] focus:outline-none"
                           />
                         </div>
 
                         <div>
                           <label className="block text-xs font-bold text-[var(--ink)] mb-1">
-                            السعر بالدولار (اختياري)
+                            السعر بالدولار ($)
                           </label>
-                          <div className="relative">
-                            <input
-                              type="text"
-                              value={newPrice}
-                              onChange={(e) => setNewPrice(e.target.value)}
-                              placeholder="25"
-                              dir="ltr"
-                              className="w-full h-11 px-3 pe-8 rounded-xl border border-[var(--line)] bg-[var(--bg)] text-[var(--ink)] text-base focus:border-[var(--red)] focus:outline-none font-bold"
-                            />
-                            <span className="absolute inset-y-0 end-3 flex items-center text-sm font-bold text-[var(--gold)]">
-                              $
-                            </span>
-                          </div>
+                          <input
+                            type="text"
+                            value={newPrice}
+                            onChange={(e) => setNewPrice(e.target.value)}
+                            placeholder="35"
+                            dir="ltr"
+                            className="w-full h-10 px-3 rounded-lg border border-[var(--line)] bg-[var(--bg)] text-[var(--ink)] text-xs focus:border-[var(--red)] focus:outline-none"
+                          />
                         </div>
                       </div>
 
-                      {/* Feedback messages */}
+                      {/* Error & Success Messages */}
                       {addError && (
-                        <div className="p-3 rounded-xl bg-red-500/10 border border-red-500/20 text-red-500 text-xs font-bold">
+                        <div className="p-2.5 rounded-lg bg-red-500/10 border border-red-500/20 text-red-500 text-xs font-bold animate-in fade-in">
                           {addError}
                         </div>
                       )}
 
                       {addSuccess && (
-                        <div className="p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-500 text-xs font-bold flex items-center gap-1.5">
+                        <div className="p-2.5 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-emerald-500 text-xs font-bold flex items-center gap-1.5 animate-in fade-in">
                           <CheckCircle2 className="w-4 h-4" />
                           <span>تم الحفظ ✓</span>
                         </div>
                       )}
 
-                      <button
-                        type="submit"
-                        disabled={isAdding || isCompressingNew}
-                        className="touch-btn w-full h-12 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-base transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50 shadow-md"
-                      >
-                        {isAdding ? (
-                          <>
-                            <Loader2 className="w-4 h-4 animate-spin" />
-                            <span>جاري النشر...</span>
-                          </>
-                        ) : (
-                          <span>إضافة المنتج الآن</span>
-                        )}
-                      </button>
+                      <div className="flex items-center gap-2 pt-1">
+                        <button
+                          type="submit"
+                          disabled={isAdding || isCompressingNew}
+                          className="touch-btn flex-1 h-11 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
+                        >
+                          {isAdding ? (
+                            <>
+                              <Loader2 className="w-4 h-4 animate-spin" />
+                              <span>جاري الحفظ في فايربيس...</span>
+                            </>
+                          ) : (
+                            <>
+                              <Save className="w-4 h-4" />
+                              <span>نشر وحفظ المنتج</span>
+                            </>
+                          )}
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => setIsAddOpen(false)}
+                          className="touch-btn px-4 h-11 rounded-xl bg-[var(--bg)] border border-[var(--line)] text-xs font-semibold text-[var(--muted)] hover:text-[var(--ink)]"
+                        >
+                          إلغاء
+                        </button>
+                      </div>
                     </form>
                   </div>
                 )}
 
-                {/* PRODUCT LIST WITH QUICK TOGGLES */}
+                {/* Products List */}
                 <div className="space-y-2.5">
-                  <h3 className="text-xs font-bold text-neutral-400 px-1">
-                    قائمة المنتجات ({currentStoreProducts.length})
-                  </h3>
-
                   {currentStoreProducts.length === 0 ? (
-                    <div className="p-8 text-center bg-white/5 rounded-2xl border border-white/10 text-neutral-400 text-xs">
-                      لا توجد منتجات مسجلة في هذا القسم بعد. اضغط على "إضافة منتج جديد" بالأعلى.
+                    <div className="text-center py-12 px-4 rounded-2xl bg-[var(--card)] border border-dashed border-[var(--line)]">
+                      <p className="text-sm font-bold text-[var(--ink)] mb-1">
+                        لا توجد منتجات في هذا القسم بعد
+                      </p>
+                      <p className="text-xs text-[var(--muted)] mb-4">
+                        انقر على "إضافة منتج جديد" لإضافة أول عنصر مباشرة في قاعدة البيانات.
+                      </p>
                     </div>
                   ) : (
-                    currentStoreProducts.map((p, index) => {
-                      const isToggling = togglingId === p.id;
+                    currentStoreProducts.map((product, idx) => (
+                      <div
+                        key={product.id}
+                        className={`p-3 rounded-xl bg-[var(--card)] border border-[var(--line)] flex items-center gap-3 transition-colors ${
+                          product.hidden ? 'opacity-60 bg-[var(--bg)]' : ''
+                        }`}
+                      >
+                        {/* Photo */}
+                        <div className="w-14 h-16 rounded-lg bg-[var(--bg)] border border-[var(--line)] overflow-hidden shrink-0 relative flex items-center justify-center">
+                          {product.imageUrl ? (
+                            <img
+                              src={product.imageUrl}
+                              alt={product.nameAr}
+                              className="w-full h-full object-cover"
+                            />
+                          ) : (
+                            <span className="text-[10px] text-[var(--muted)] text-center px-1">
+                              بلا صورة
+                            </span>
+                          )}
+                        </div>
 
-                      return (
-                        <div
-                          key={p.id}
-                          className={`flex items-center gap-3 p-2.5 sm:p-3 rounded-xl border transition-all ${
-                            p.hidden
-                              ? 'bg-neutral-900/40 border-neutral-800 opacity-60'
-                              : 'bg-[var(--card)] border-[var(--line)] shadow-2xs'
-                          }`}
-                        >
-                          {/* Reorder Buttons (↑ / ↓) */}
-                          <div className="flex flex-col gap-1 shrink-0">
-                            <button
-                              type="button"
-                              disabled={index === 0}
-                              onClick={() => handleReorder(p.id, 'up')}
-                              className="w-6 h-6 rounded bg-black/10 hover:bg-black/20 text-neutral-400 hover:text-white flex items-center justify-center disabled:opacity-20 cursor-pointer"
-                              title="تحريك لأعلى"
-                            >
-                              <ArrowUp className="w-3.5 h-3.5" />
-                            </button>
-                            <button
-                              type="button"
-                              disabled={index === currentStoreProducts.length - 1}
-                              onClick={() => handleReorder(p.id, 'down')}
-                              className="w-6 h-6 rounded bg-black/10 hover:bg-black/20 text-neutral-400 hover:text-white flex items-center justify-center disabled:opacity-20 cursor-pointer"
-                              title="تحريك لأسفل"
-                            >
-                              <ArrowDown className="w-3.5 h-3.5" />
-                            </button>
-                          </div>
-
-                          {/* Thumbnail */}
-                          <div className="w-12 h-14 rounded-lg overflow-hidden bg-[var(--bg)] border border-[var(--line)] shrink-0 relative">
-                            {p.imageUrl ? (
-                              <img
-                                src={p.imageUrl}
-                                alt={p.nameAr}
-                                className="w-full h-full object-cover"
-                              />
-                            ) : (
-                              <div className="w-full h-full diagonal-placeholder flex items-center justify-center text-[9px] text-[var(--muted)]">
-                                بلا صورة
-                              </div>
-                            )}
-                            {p.soldOut && (
-                              <div className="absolute inset-0 bg-red-600/80 text-white text-[8px] font-bold flex items-center justify-center">
-                                نفد
-                              </div>
-                            )}
-                          </div>
-
-                          {/* Details */}
-                          <div className="flex-1 min-w-0">
+                        {/* Title and details */}
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2">
                             <h4 className="text-xs sm:text-sm font-bold text-[var(--ink)] truncate">
-                              {p.nameAr}
+                              {product.nameAr}
                             </h4>
-                            <div className="flex items-center gap-2 text-[11px] text-[var(--muted)]">
-                              {p.price && (
-                                <span className="font-bold text-[var(--gold)]" dir="ltr">
-                                  ${p.price}
-                                </span>
-                              )}
-                              {p.category && (
-                                <span className="px-1.5 py-0.5 rounded bg-[var(--bg)] border border-[var(--line)] text-[10px]">
-                                  {p.category}
-                                </span>
-                              )}
-                            </div>
+                            {product.soldOut && (
+                              <span className="px-1.5 py-0.5 rounded bg-red-500/20 text-red-400 text-[10px] font-bold shrink-0">
+                                نفد
+                              </span>
+                            )}
+                            {product.hidden && (
+                              <span className="px-1.5 py-0.5 rounded bg-neutral-500/20 text-neutral-400 text-[10px] font-bold shrink-0">
+                                مخفي
+                              </span>
+                            )}
                           </div>
 
-                          {/* Quick Actions */}
-                          <div className="flex items-center gap-1.5 shrink-0">
-                            {/* SoldOut Toggle */}
-                            <button
-                              type="button"
-                              disabled={isToggling}
-                              onClick={() => handleToggleSoldOut(p)}
-                              className={`touch-btn px-2 py-1 rounded-lg text-[11px] font-bold border transition-colors cursor-pointer ${
-                                p.soldOut
-                                  ? 'bg-red-500/20 text-red-400 border-red-500/30'
-                                  : 'bg-emerald-500/10 text-emerald-500 border-emerald-500/20 hover:bg-emerald-500/20'
-                              }`}
-                            >
-                              {p.soldOut ? 'نفد' : 'متوفر'}
-                            </button>
-
-                            {/* Hidden Toggle */}
-                            <button
-                              type="button"
-                              disabled={isToggling}
-                              onClick={() => handleToggleHidden(p)}
-                              className={`touch-btn px-2 py-1 rounded-lg text-[11px] font-bold border transition-colors cursor-pointer ${
-                                p.hidden
-                                  ? 'bg-amber-500/20 text-amber-400 border-amber-500/30'
-                                  : 'bg-neutral-500/10 text-neutral-400 border-neutral-500/20 hover:text-white'
-                              }`}
-                            >
-                              {p.hidden ? 'مخفي' : 'ظاهر'}
-                            </button>
-
-                            {/* Edit / Delete */}
-                            <button
-                              type="button"
-                              onClick={() => openEditModal(p)}
-                              className="touch-btn w-8 h-8 rounded-lg bg-[var(--bg)] border border-[var(--line)] hover:border-[var(--muted)] text-[var(--ink)] flex items-center justify-center cursor-pointer"
-                              title="تعديل أو حذف"
-                            >
-                              <Edit3 className="w-3.5 h-3.5" />
-                            </button>
+                          <div className="flex items-center gap-2 text-[11px] text-[var(--muted)] mt-1">
+                            {product.price && (
+                              <span className="text-[var(--gold)] font-bold" dir="ltr">
+                                ${product.price}
+                              </span>
+                            )}
+                            {product.category && <span>• {product.category}</span>}
                           </div>
                         </div>
-                      );
-                    })
+
+                        {/* Reorder arrows */}
+                        <div className="flex flex-col gap-1 shrink-0">
+                          <button
+                            onClick={(e) => handleReorder(product, 'up', e)}
+                            disabled={idx === 0}
+                            className="p-1 rounded bg-[var(--bg)] hover:bg-[var(--line)] disabled:opacity-30 text-[var(--ink)]"
+                            title="تحريك لأعلى"
+                          >
+                            <ArrowUp className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            onClick={(e) => handleReorder(product, 'down', e)}
+                            disabled={idx === currentStoreProducts.length - 1}
+                            className="p-1 rounded bg-[var(--bg)] hover:bg-[var(--line)] disabled:opacity-30 text-[var(--ink)]"
+                            title="تحريك لأسفل"
+                          >
+                            <ArrowDown className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+
+                        {/* Actions: Edit, Toggle Sold, Toggle Hidden */}
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          <button
+                            onClick={(e) => handleToggleSoldOut(product, e)}
+                            disabled={togglingId === product.id}
+                            className={`px-2 py-1.5 rounded-lg text-[10px] font-bold border transition-colors ${
+                              product.soldOut
+                                ? 'bg-red-500/10 border-red-500/30 text-red-400'
+                                : 'bg-[var(--bg)] border-[var(--line)] text-[var(--muted)] hover:text-[var(--ink)]'
+                            }`}
+                          >
+                            {product.soldOut ? 'إلغاء نفد' : 'نفد'}
+                          </button>
+
+                          <button
+                            onClick={() => handleOpenEdit(product)}
+                            className="p-2 rounded-lg bg-[var(--bg)] border border-[var(--line)] text-[var(--ink)] hover:border-[var(--muted)] transition-colors"
+                            title="تعديل"
+                          >
+                            <Edit3 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      </div>
+                    ))
                   )}
                 </div>
               </div>
             )}
 
-            {/* TAB CONTENT: SETTINGS */}
-            {/* TAB CONTENT: SETTINGS */}
+            {/* SETTINGS TAB */}
             {activeTab === 'settings' && (
               <div className="space-y-6">
                 {/* 1. General Site Settings */}
-                <form onSubmit={handleSaveSettings} className="space-y-4">
-                  <div className="bg-[var(--card)] border border-[var(--line)] rounded-2xl p-4 sm:p-5 space-y-4 shadow-xl">
-                    {/* Announcement Banner */}
+                <form
+                  onSubmit={handleSaveSettings}
+                  className="bg-[var(--card)] border border-[var(--line)] rounded-2xl p-4 sm:p-6 space-y-4 shadow-sm"
+                >
+                  <h3 className="font-bold text-sm sm:text-base text-[var(--ink)] flex items-center gap-2 border-b border-[var(--line)] pb-3">
+                    <Megaphone className="w-4 h-4 text-[var(--red)]" />
+                    <span>إعدادات المتجر العامة</span>
+                  </h3>
+
+                  {/* Announcement Banner */}
+                  <div>
+                    <label className="block text-xs font-bold text-[var(--ink)] mb-1">
+                      شريط الإعلان أعلى الصفحة (أحمر)
+                    </label>
+                    <input
+                      type="text"
+                      value={bannerText}
+                      onChange={(e) => setBannerText(e.target.value)}
+                      placeholder="مثال: خصم 20% على جميع تشكيلات الشتاء! اترك الحقل فارغاً لإخفاء الشريط."
+                      className="w-full h-10 px-3 rounded-lg border border-[var(--line)] bg-[var(--bg)] text-[var(--ink)] text-xs focus:border-[var(--red)] focus:outline-none"
+                    />
+                    <p className="text-[10px] text-[var(--muted)] mt-1">
+                      اترك الحقل فارغاً لإخفاء الشريط تماماً من أعلى الموقع.
+                    </p>
+                  </div>
+
+                  {/* Phone Numbers */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <div>
-                      <label className="block text-xs font-bold text-[var(--ink)] mb-1.5 flex items-center gap-1.5">
-                        <Megaphone className="w-4 h-4 text-[var(--red)]" />
-                        <span>شريط الإعلانات العلوي (فارغ = مخفي)</span>
+                      <label className="block text-xs font-bold text-[var(--ink)] mb-1">
+                        رقم هاتف / واتساب رجالي
                       </label>
                       <input
                         type="text"
-                        value={bannerText}
-                        onChange={(e) => setBannerText(e.target.value)}
-                        placeholder="مثال: خصم 20% على جميع البدلات الرجالية بمناسبة الموسم"
-                        className="w-full h-11 px-3 rounded-xl border border-[var(--line)] bg-[var(--bg)] text-[var(--ink)] text-base focus:border-[var(--red)] focus:outline-none"
+                        value={menPhoneVal}
+                        onChange={(e) => setMenPhoneVal(e.target.value)}
+                        placeholder="76 320 279"
+                        dir="ltr"
+                        className="w-full h-10 px-3 rounded-lg border border-[var(--line)] bg-[var(--bg)] text-[var(--ink)] text-xs focus:border-[var(--red)] focus:outline-none"
                       />
-                      <p className="text-[10px] text-[var(--muted)] mt-1">
-                        يظهر كشريط أحمر أنيق في أعلى الموقع لجذب انتباه الزوار.
-                      </p>
                     </div>
 
-                    {/* Hero Background Image */}
                     <div>
-                      <label className="block text-xs font-bold text-[var(--ink)] mb-2 flex items-center gap-1.5">
-                        <Sparkles className="w-4 h-4 text-[var(--gold)]" />
-                        <span>صورة خلفية الواجهة الرئيسية (Hero)</span>
+                      <label className="block text-xs font-bold text-[var(--ink)] mb-1">
+                        رقم هاتف / واتساب نسائي
                       </label>
-                      <div className="flex items-center gap-3">
-                        <div className="w-24 h-16 rounded-xl border-2 border-dashed border-[var(--line)] overflow-hidden bg-[var(--bg)] flex items-center justify-center relative shrink-0">
-                          {isCompressingHero ? (
-                            <Loader2 className="w-6 h-6 animate-spin text-[var(--muted)]" />
-                          ) : heroImageBase64 ? (
-                            <img
-                              src={heroImageBase64}
-                              alt="Hero Preview"
-                              className="w-full h-full object-cover"
-                            />
-                          ) : (
-                            <span className="text-[10px] text-[var(--muted)]">بدون خلفية</span>
-                          )}
-                        </div>
-
-                        <div className="space-y-1.5 flex-1 min-w-0">
-                          <input
-                            type="file"
-                            ref={heroFileInputRef}
-                            accept="image/*"
-                            onChange={handleHeroImageChange}
-                            className="hidden"
-                            id="hero-photo-input"
-                          />
-                          <label
-                            htmlFor="hero-photo-input"
-                            className="touch-btn inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-[var(--bg)] border border-[var(--line)] hover:border-[var(--muted)] text-xs font-bold text-[var(--ink)] cursor-pointer"
-                          >
-                            <Upload className="w-3.5 h-3.5" />
-                            <span>تغيير صورة الواجهة</span>
-                          </label>
-
-                          {heroImageBase64 && (
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setHeroImageBase64('');
-                                if (heroFileInputRef.current) heroFileInputRef.current.value = '';
-                              }}
-                              className="block text-[11px] text-red-500 hover:underline cursor-pointer"
-                            >
-                              حذف صورة الواجهة واستخدام الخلفية الداكنة
-                            </button>
-                          )}
-                        </div>
-                      </div>
+                      <input
+                        type="text"
+                        value={womenPhoneVal}
+                        onChange={(e) => setWomenPhoneVal(e.target.value)}
+                        placeholder="81 612 154"
+                        dir="ltr"
+                        className="w-full h-10 px-3 rounded-lg border border-[var(--line)] bg-[var(--bg)] text-[var(--ink)] text-xs focus:border-[var(--red)] focus:outline-none"
+                      />
                     </div>
-
-                    {/* Phone Numbers */}
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2 border-t border-[var(--line)]">
-                      <div>
-                        <label className="block text-xs font-bold text-[var(--ink)] mb-1 flex items-center gap-1.5">
-                          <Phone className="w-3.5 h-3.5 text-[var(--red)]" />
-                          <span>رقم هاتف / واتساب (رجالي)</span>
-                        </label>
-                        <input
-                          type="text"
-                          value={menPhoneVal}
-                          onChange={(e) => setMenPhoneVal(e.target.value)}
-                          placeholder="76 320 279"
-                          dir="ltr"
-                          className="w-full h-11 px-3 rounded-xl border border-[var(--line)] bg-[var(--bg)] text-[var(--ink)] text-base font-bold focus:border-[var(--red)] focus:outline-none"
-                        />
-                      </div>
-
-                      <div>
-                        <label className="block text-xs font-bold text-[var(--ink)] mb-1 flex items-center gap-1.5">
-                          <Phone className="w-3.5 h-3.5 text-[var(--gold)]" />
-                          <span>رقم هاتف / واتساب (نسائي)</span>
-                        </label>
-                        <input
-                          type="text"
-                          value={womenPhoneVal}
-                          onChange={(e) => setWomenPhoneVal(e.target.value)}
-                          placeholder="81 612 154"
-                          dir="ltr"
-                          className="w-full h-11 px-3 rounded-xl border border-[var(--line)] bg-[var(--bg)] text-[var(--ink)] text-base font-bold focus:border-[var(--red)] focus:outline-none"
-                        />
-                      </div>
-                    </div>
-
-                    {/* Feedback */}
-                    {settingsError && (
-                      <div className="p-3 rounded-xl bg-red-500/10 border border-red-500/20 text-red-500 text-xs font-bold">
-                        {settingsError}
-                      </div>
-                    )}
-
-                    {settingsSuccess && (
-                      <div className="p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-500 text-xs font-bold flex items-center gap-1.5">
-                        <CheckCircle2 className="w-4 h-4" />
-                        <span>تم الحفظ ✓</span>
-                      </div>
-                    )}
-
-                    <button
-                      type="submit"
-                      disabled={isSavingSettings || isCompressingHero}
-                      className="touch-btn w-full h-12 rounded-xl bg-[var(--red)] hover:bg-[#a31117] text-white font-bold text-base transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50 shadow-md"
-                    >
-                      {isSavingSettings ? (
-                        <>
-                          <Loader2 className="w-4 h-4 animate-spin" />
-                          <span>جاري حفظ الإعدادات...</span>
-                        </>
-                      ) : (
-                        <>
-                          <Save className="w-4 h-4" />
-                          <span>حفظ الإعدادات</span>
-                        </>
-                      )}
-                    </button>
                   </div>
+
+                  {/* Hero Background Image */}
+                  <div>
+                    <label className="block text-xs font-bold text-[var(--ink)] mb-1.5">
+                      صورة خلفية الواجهة الرئيسية (Hero Image)
+                    </label>
+                    <div className="flex items-center gap-3">
+                      <div className="w-20 h-14 rounded-lg bg-[var(--bg)] border border-[var(--line)] overflow-hidden shrink-0 flex items-center justify-center relative">
+                        {isCompressingHero ? (
+                          <Loader2 className="w-5 h-5 animate-spin text-[var(--muted)]" />
+                        ) : heroImageBase64 ? (
+                          <img
+                            src={heroImageBase64}
+                            alt="Hero"
+                            className="w-full h-full object-cover"
+                          />
+                        ) : (
+                          <span className="text-[10px] text-[var(--muted)]">خلفية داكنة</span>
+                        )}
+                      </div>
+
+                      <div className="space-y-1 flex-1">
+                        <input
+                          type="file"
+                          ref={heroFileInputRef}
+                          accept="image/*"
+                          onChange={handleHeroImageChange}
+                          className="hidden"
+                          id="hero-bg-photo"
+                        />
+                        <label
+                          htmlFor="hero-bg-photo"
+                          className="touch-btn inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[var(--bg)] border border-[var(--line)] text-xs font-bold text-[var(--ink)] cursor-pointer"
+                        >
+                          <Upload className="w-3.5 h-3.5" />
+                          <span>{heroImageBase64 ? 'تغيير الخلفية' : 'رفع صورة للواجهة'}</span>
+                        </label>
+
+                        {heroImageBase64 && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setHeroImageBase64('');
+                              if (heroFileInputRef.current) heroFileInputRef.current.value = '';
+                            }}
+                            className="block text-[11px] text-red-500 hover:underline cursor-pointer"
+                          >
+                            إزالة الخلفية والعودة للنمط الافتراضي
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Error & Success Feedback */}
+                  {settingsError && (
+                    <div className="p-2.5 rounded-lg bg-red-500/10 border border-red-500/20 text-red-500 text-xs font-bold animate-in fade-in">
+                      {settingsError}
+                    </div>
+                  )}
+
+                  {settingsSuccess && (
+                    <div className="p-2.5 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-emerald-500 text-xs font-bold flex items-center gap-1.5 animate-in fade-in">
+                      <CheckCircle2 className="w-4 h-4" />
+                      <span>تم الحفظ في فايربيس ✓</span>
+                    </div>
+                  )}
+
+                  <button
+                    type="submit"
+                    disabled={isSavingSettings || isCompressingHero}
+                    className="touch-btn w-full h-11 rounded-xl bg-[var(--red)] hover:bg-[#a61217] text-white font-bold text-xs flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50 shadow-md"
+                  >
+                    {isSavingSettings ? (
+                      <>
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                        <span>جاري حفظ الإعدادات...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Save className="w-4 h-4" />
+                        <span>حفظ الإعدادات</span>
+                      </>
+                    )}
+                  </button>
                 </form>
 
-                {/* 2. Change Password Section */}
-                <form onSubmit={handleChangePassword} className="space-y-4">
-                  <div className="bg-[var(--card)] border border-[var(--line)] rounded-2xl p-4 sm:p-5 space-y-4 shadow-xl">
-                    <div className="border-b border-[var(--line)] pb-3">
-                      <h3 className="text-base font-bold text-[var(--ink)] flex items-center gap-2">
-                        <KeyRound className="w-4 h-4 text-[var(--gold)]" />
-                        <span>تغيير الرمز السري</span>
-                      </h3>
-                      <p className="text-[11px] text-[var(--muted)] mt-1">
-                        تحديث الرمز السري المستخدم للدخول إلى لوحة التحكم
-                      </p>
-                    </div>
+                {/* 2. Change Admin Password */}
+                <form
+                  onSubmit={handleChangePassword}
+                  className="bg-[var(--card)] border border-[var(--line)] rounded-2xl p-4 sm:p-6 space-y-4 shadow-sm"
+                >
+                  <h3 className="font-bold text-sm sm:text-base text-[var(--ink)] flex items-center gap-2 border-b border-[var(--line)] pb-3">
+                    <KeyRound className="w-4 h-4 text-[var(--gold)]" />
+                    <span>تغيير الرمز السري للمسؤول</span>
+                  </h3>
 
-                    {/* Field 1: Current Password */}
+                  <div className="space-y-3">
+                    {/* Current password */}
                     <div>
-                      <label className="block text-xs font-bold text-[var(--ink)] mb-1.5">
+                      <label className="block text-xs font-bold text-[var(--ink)] mb-1">
                         الرمز الحالي <span className="text-[var(--red)]">*</span>
                       </label>
                       <div className="relative">
                         <input
                           type={showCurrentPwd ? 'text' : 'password'}
                           required
+                          autoComplete="off"
                           value={currentPassword}
                           onChange={(e) => {
                             setCurrentPassword(e.target.value);
                             if (passwordError) setPasswordError('');
                           }}
-                          placeholder="••••••••"
+                          placeholder="الرمز الحالي"
                           dir="ltr"
-                          className="w-full h-11 px-3 pe-10 rounded-xl border border-[var(--line)] bg-[var(--bg)] text-[var(--ink)] font-mono text-base focus:border-[var(--red)] focus:outline-none"
+                          className="w-full h-10 px-3 pe-10 rounded-lg border border-[var(--line)] bg-[var(--bg)] text-[var(--ink)] text-xs focus:border-[var(--gold)] focus:outline-none"
                         />
                         <button
                           type="button"
                           onClick={() => setShowCurrentPwd(!showCurrentPwd)}
-                          className="absolute inset-y-0 end-0 px-3 flex items-center text-[var(--muted)] hover:text-[var(--ink)] cursor-pointer"
+                          className="absolute inset-y-0 end-0 px-3 flex items-center text-[var(--muted)] hover:text-[var(--ink)]"
                           tabIndex={-1}
-                          aria-label="إظهار أو إخفاء الرمز الحالي"
                         >
-                          {showCurrentPwd ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                          {showCurrentPwd ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
                         </button>
                       </div>
                     </div>
 
-                    {/* Field 2: New Password */}
+                    {/* New password */}
                     <div>
-                      <label className="block text-xs font-bold text-[var(--ink)] mb-1.5">
+                      <label className="block text-xs font-bold text-[var(--ink)] mb-1">
                         الرمز الجديد <span className="text-[var(--red)]">*</span>
                       </label>
                       <div className="relative">
                         <input
                           type={showNewPwd ? 'text' : 'password'}
                           required
+                          autoComplete="off"
                           value={newPassword}
                           onChange={(e) => {
                             setNewPassword(e.target.value);
                             if (passwordError) setPasswordError('');
                           }}
-                          placeholder="••••••••"
+                          placeholder="6 أحرف أو أكثر"
                           dir="ltr"
-                          className="w-full h-11 px-3 pe-10 rounded-xl border border-[var(--line)] bg-[var(--bg)] text-[var(--ink)] font-mono text-base focus:border-[var(--red)] focus:outline-none"
+                          className="w-full h-10 px-3 pe-10 rounded-lg border border-[var(--line)] bg-[var(--bg)] text-[var(--ink)] text-xs focus:border-[var(--gold)] focus:outline-none"
                         />
                         <button
                           type="button"
                           onClick={() => setShowNewPwd(!showNewPwd)}
-                          className="absolute inset-y-0 end-0 px-3 flex items-center text-[var(--muted)] hover:text-[var(--ink)] cursor-pointer"
+                          className="absolute inset-y-0 end-0 px-3 flex items-center text-[var(--muted)] hover:text-[var(--ink)]"
                           tabIndex={-1}
-                          aria-label="إظهار أو إخفاء الرمز الجديد"
                         >
-                          {showNewPwd ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                          {showNewPwd ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
                         </button>
                       </div>
-                      <p className="text-[10px] text-[var(--muted)] mt-1">
-                        يجب ألا يقل عن 6 أحرف (يُفضل 8 أحرف وأكثر)، ويختلف عن الرمز الحالي.
-                      </p>
                     </div>
 
-                    {/* Field 3: Confirm New Password */}
+                    {/* Confirm new password */}
                     <div>
-                      <label className="block text-xs font-bold text-[var(--ink)] mb-1.5">
+                      <label className="block text-xs font-bold text-[var(--ink)] mb-1">
                         تأكيد الرمز الجديد <span className="text-[var(--red)]">*</span>
                       </label>
                       <div className="relative">
                         <input
                           type={showConfirmPwd ? 'text' : 'password'}
                           required
+                          autoComplete="off"
                           value={confirmPassword}
                           onChange={(e) => {
                             setConfirmPassword(e.target.value);
                             if (passwordError) setPasswordError('');
                           }}
-                          placeholder="••••••••"
+                          placeholder="أعد إدخال الرمز الجديد"
                           dir="ltr"
-                          className="w-full h-11 px-3 pe-10 rounded-xl border border-[var(--line)] bg-[var(--bg)] text-[var(--ink)] font-mono text-base focus:border-[var(--red)] focus:outline-none"
+                          className="w-full h-10 px-3 pe-10 rounded-lg border border-[var(--line)] bg-[var(--bg)] text-[var(--ink)] text-xs focus:border-[var(--gold)] focus:outline-none"
                         />
                         <button
                           type="button"
                           onClick={() => setShowConfirmPwd(!showConfirmPwd)}
-                          className="absolute inset-y-0 end-0 px-3 flex items-center text-[var(--muted)] hover:text-[var(--ink)] cursor-pointer"
+                          className="absolute inset-y-0 end-0 px-3 flex items-center text-[var(--muted)] hover:text-[var(--ink)]"
                           tabIndex={-1}
-                          aria-label="إظهار أو إخفاء تأكيد الرمز الجديد"
                         >
-                          {showConfirmPwd ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                          {showConfirmPwd ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
                         </button>
                       </div>
                     </div>
 
                     {/* Error & Success Feedback */}
                     {passwordError && (
-                      <div className="p-3 rounded-xl bg-red-500/10 border border-red-500/20 text-red-500 text-xs font-bold animate-in fade-in">
+                      <div className="p-2.5 rounded-lg bg-red-500/10 border border-red-500/20 text-red-500 text-xs font-bold animate-in fade-in">
                         {passwordError}
                       </div>
                     )}
 
                     {passwordSuccess && (
-                      <div className="p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-500 text-xs font-bold flex items-center gap-1.5 animate-in fade-in">
+                      <div className="p-2.5 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-emerald-500 text-xs font-bold flex items-center gap-1.5 animate-in fade-in">
                         <CheckCircle2 className="w-4 h-4" />
-                        <span>تم تغيير الرمز ✓</span>
+                        <span>تم تحديث الرمز بنجاح ✓</span>
                       </div>
                     )}
 
                     <button
                       type="submit"
                       disabled={isChangingPassword}
-                      className="touch-btn w-full h-12 rounded-xl bg-[var(--gold)] hover:bg-[#9d7725] text-black font-bold text-base transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50 shadow-md"
+                      className="touch-btn w-full h-11 rounded-xl bg-[var(--gold)] hover:bg-[#9d7725] text-black font-bold text-xs transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50 shadow-md"
                     >
                       {isChangingPassword ? (
                         <>
                           <Loader2 className="w-4 h-4 animate-spin text-black" />
-                          <span>جاري تغيير الرمز...</span>
+                          <span>جاري التحديث...</span>
                         </>
                       ) : (
                         <>
@@ -1363,7 +1441,7 @@ export const AdminModal: React.FC<AdminModalProps> = ({
                   الصورة
                 </label>
                 <div className="flex items-center gap-3">
-                  <div className="w-16 h-20 rounded-lg overflow-hidden bg-[var(--bg)] border border-[var(--line)] shrink-0 relative">
+                  <div className="w-16 h-20 rounded-lg overflow-hidden bg-[var(--bg)] border border-[var(--line)] shrink-0 flex items-center justify-center relative">
                     {isCompressingEdit ? (
                       <Loader2 className="w-5 h-5 animate-spin text-[var(--muted)]" />
                     ) : editImageBase64 ? (
@@ -1419,20 +1497,20 @@ export const AdminModal: React.FC<AdminModalProps> = ({
                   required
                   value={editNameAr}
                   onChange={(e) => setEditNameAr(e.target.value)}
-                  className="w-full h-11 px-3 rounded-xl border border-[var(--line)] bg-[var(--bg)] text-[var(--ink)] text-base focus:border-[var(--red)] focus:outline-none"
+                  className="w-full h-10 px-3 rounded-lg border border-[var(--line)] bg-[var(--bg)] text-[var(--ink)] text-xs focus:border-[var(--red)] focus:outline-none"
                 />
               </div>
 
               <div>
                 <label className="block text-xs font-bold text-[var(--ink)] mb-1">
-                  الاسم بالإنجليزية
+                  الاسم بالإنجليزية (اختياري)
                 </label>
                 <input
                   type="text"
                   value={editNameEn}
                   onChange={(e) => setEditNameEn(e.target.value)}
                   dir="ltr"
-                  className="w-full h-11 px-3 rounded-xl border border-[var(--line)] bg-[var(--bg)] text-[var(--ink)] text-base focus:border-[var(--red)] focus:outline-none"
+                  className="w-full h-10 px-3 rounded-lg border border-[var(--line)] bg-[var(--bg)] text-[var(--ink)] text-xs focus:border-[var(--red)] focus:outline-none"
                 />
               </div>
 
@@ -1445,7 +1523,7 @@ export const AdminModal: React.FC<AdminModalProps> = ({
                     type="text"
                     value={editCategory}
                     onChange={(e) => setEditCategory(e.target.value)}
-                    className="w-full h-11 px-3 rounded-xl border border-[var(--line)] bg-[var(--bg)] text-[var(--ink)] text-base focus:border-[var(--red)] focus:outline-none"
+                    className="w-full h-10 px-3 rounded-lg border border-[var(--line)] bg-[var(--bg)] text-[var(--ink)] text-xs focus:border-[var(--red)] focus:outline-none"
                   />
                 </div>
 
@@ -1458,19 +1536,20 @@ export const AdminModal: React.FC<AdminModalProps> = ({
                     value={editPrice}
                     onChange={(e) => setEditPrice(e.target.value)}
                     dir="ltr"
-                    className="w-full h-11 px-3 rounded-xl border border-[var(--line)] bg-[var(--bg)] text-[var(--ink)] text-base font-bold focus:border-[var(--red)] focus:outline-none"
+                    className="w-full h-10 px-3 rounded-lg border border-[var(--line)] bg-[var(--bg)] text-[var(--ink)] text-xs focus:border-[var(--red)] focus:outline-none"
                   />
                 </div>
               </div>
 
+              {/* Error & Success Messages */}
               {editError && (
-                <div className="p-2.5 rounded-lg bg-red-500/10 border border-red-500/20 text-red-500 text-xs font-bold">
+                <div className="p-2.5 rounded-lg bg-red-500/10 border border-red-500/20 text-red-500 text-xs font-bold animate-in fade-in">
                   {editError}
                 </div>
               )}
 
               {editSuccess && (
-                <div className="p-2.5 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-emerald-500 text-xs font-bold flex items-center gap-1.5">
+                <div className="p-2.5 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-emerald-500 text-xs font-bold flex items-center gap-1.5 animate-in fade-in">
                   <CheckCircle2 className="w-4 h-4" />
                   <span>تم الحفظ ✓</span>
                 </div>
@@ -1480,7 +1559,7 @@ export const AdminModal: React.FC<AdminModalProps> = ({
                 <button
                   type="submit"
                   disabled={isSavingEdit || isCompressingEdit}
-                  className="touch-btn flex-1 h-11 rounded-xl bg-[var(--red)] hover:bg-[#a31117] text-white font-bold text-sm transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
+                  className="touch-btn flex-1 h-11 rounded-xl bg-[var(--red)] hover:bg-[#a61217] text-white font-bold text-xs flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
                 >
                   {isSavingEdit ? (
                     <>
@@ -1488,25 +1567,26 @@ export const AdminModal: React.FC<AdminModalProps> = ({
                       <span>جاري الحفظ...</span>
                     </>
                   ) : (
-                    <span>حفظ التعديلات</span>
+                    <>
+                      <Save className="w-4 h-4" />
+                      <span>حفظ التعديلات</span>
+                    </>
                   )}
                 </button>
 
                 <button
                   type="button"
                   disabled={isDeleting}
-                  onClick={handleDeleteProduct}
-                  className="touch-btn px-4 h-11 rounded-xl border border-red-500/30 text-red-500 hover:bg-red-500/10 font-bold text-sm transition-all flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50"
-                  title="حذف المنتج نهائياً"
+                  onClick={() => handleDeleteProduct(editingProduct.id)}
+                  className="touch-btn px-3 h-11 rounded-xl bg-red-500/10 hover:bg-red-500/20 text-red-500 text-xs font-bold flex items-center gap-1.5 border border-red-500/20 cursor-pointer disabled:opacity-50"
+                  title="حذف المنتج"
                 >
                   {isDeleting ? (
                     <Loader2 className="w-4 h-4 animate-spin" />
                   ) : (
-                    <>
-                      <Trash2 className="w-4 h-4" />
-                      <span>حذف</span>
-                    </>
+                    <Trash2 className="w-4 h-4" />
                   )}
+                  <span>حذف</span>
                 </button>
               </div>
             </form>

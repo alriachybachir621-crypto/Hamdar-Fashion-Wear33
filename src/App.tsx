@@ -16,12 +16,14 @@ import {
   ChevronRight,
   X,
   ShoppingBag,
+  Loader2,
 } from 'lucide-react';
 import { Product, SiteSettings, Language } from './types';
 import {
   subscribeProducts,
   subscribeSettings,
   subscribeAuth,
+  signOutAdminOnLoad,
 } from './firebaseService';
 import { AdminModal } from './components/AdminModal';
 import { INITIAL_PRODUCTS, INITIAL_SETTINGS } from './initialData';
@@ -29,6 +31,7 @@ import { INITIAL_PRODUCTS, INITIAL_SETTINGS } from './initialData';
 export default function App() {
   const [lang, setLang] = useState<Language>('ar');
   const [products, setProducts] = useState<Product[]>(INITIAL_PRODUCTS);
+  const [isLoadingProducts, setIsLoadingProducts] = useState(true);
   const [settings, setSettings] = useState<SiteSettings>(INITIAL_SETTINGS);
   const [user, setUser] = useState<any>(null);
   const [isAdminOpen, setIsAdminOpen] = useState(false);
@@ -48,20 +51,33 @@ export default function App() {
   const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pointerStartPosRef = useRef<{ x: number; y: number } | null>(null);
 
+  // Sign out admin on page load to ensure ephemeral admin session
+  useEffect(() => {
+    signOutAdminOnLoad();
+  }, []);
+
   // Update HTML tag attributes on language change
   useEffect(() => {
     document.documentElement.lang = lang;
     document.documentElement.dir = lang === 'ar' ? 'rtl' : 'ltr';
   }, [lang]);
 
-  // Listen to Firestore / Realtime subscriptions
+  // Listen to Firestore Realtime subscriptions
   useEffect(() => {
-    const unsubProducts = subscribeProducts((prods) => {
-      setProducts(prods);
-    });
+    const unsubProducts = subscribeProducts(
+      (prods) => {
+        setProducts(prods);
+        setIsLoadingProducts(false);
+      },
+      () => {
+        setIsLoadingProducts(false);
+      }
+    );
+
     const unsubSettings = subscribeSettings((sett) => {
       setSettings(sett);
     });
+
     const unsubAuth = subscribeAuth((u) => {
       setUser(u);
     });
@@ -118,18 +134,18 @@ export default function App() {
     if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current);
     longPressTimerRef.current = setTimeout(() => {
       setIsAdminOpen(true);
+      pointerTapTimesRef.current = [];
+      longPressTimerRef.current = null;
     }, 1500);
   };
 
   const handleCopyrightPointerMove = (e: React.PointerEvent) => {
-    if (pointerStartPosRef.current) {
+    if (pointerStartPosRef.current && longPressTimerRef.current) {
       const dx = Math.abs(e.clientX - pointerStartPosRef.current.x);
       const dy = Math.abs(e.clientY - pointerStartPosRef.current.y);
-      if (dx > 12 || dy > 12) {
-        if (longPressTimerRef.current) {
-          clearTimeout(longPressTimerRef.current);
-          longPressTimerRef.current = null;
-        }
+      if (dx > 10 || dy > 10) {
+        clearTimeout(longPressTimerRef.current);
+        longPressTimerRef.current = null;
       }
     }
   };
@@ -261,21 +277,28 @@ export default function App() {
         </aside>
       )}
 
-      {/* 2. Sticky Header with HAMDAR Logo */}
+      {/* 2. Sticky Header with strictly LTR HAMDAR Logo (Immune to RTL reversal) */}
       <header className="sticky top-0 z-30 bg-[var(--bg)]/90 backdrop-blur-md border-b border-[var(--line)] safe-top transition-colors w-full max-w-full min-w-0">
         <div className="max-w-6xl mx-auto px-4 h-16 flex items-center justify-between gap-2 min-w-0 w-full">
-          {/* Logo "HAMDAR" with explicit LTR isolation to prevent Arabic RTL inversion */}
+          {/* Logo "HAMDAR": Uses bdo dir="ltr" + inline-flex to guarantee H-A-M-D-A-R order in all browsers */}
           <a
             href="#"
-            className="font-heading text-xl sm:text-2xl md:text-3xl font-bold tracking-[0.06em] select-none hover:opacity-90 transition-opacity shrink-0"
-            style={{ direction: 'ltr', unicodeBidi: 'isolate', display: 'inline-block' }}
+            dir="ltr"
+            className="select-none hover:opacity-90 transition-opacity shrink-0 inline-flex flex-row items-center"
+            style={{ direction: 'ltr', unicodeBidi: 'bidi-override' }}
             aria-label="Hamdar Fashion Wear Home"
           >
-            <span>H</span>
-            <span className="text-[var(--red)]">A</span>
-            <span>MD</span>
-            <span className="text-[var(--red)]">A</span>
-            <span>R</span>
+            <bdo
+              dir="ltr"
+              className="inline-flex flex-row items-center font-heading text-xl sm:text-2xl md:text-3xl font-bold tracking-[0.06em]"
+              style={{ direction: 'ltr' }}
+            >
+              <span>H</span>
+              <span className="text-[var(--red)]">A</span>
+              <span>MD</span>
+              <span className="text-[var(--red)]">A</span>
+              <span>R</span>
+            </bdo>
           </a>
 
           {/* Center Navigation Links (Hidden on small mobile) */}
@@ -331,24 +354,25 @@ export default function App() {
         )}
 
         <div className="max-w-4xl mx-auto relative z-10 flex flex-col items-center py-10 w-full min-w-0">
-          {/* Big HAMDAR Wordmark: fits 320px/375px screens safely with clamp() */}
+          {/* Big HAMDAR Wordmark with strict bdo LTR override */}
           <div className="w-full max-w-full overflow-hidden flex justify-center px-2">
-            <h1
+            <bdo
+              dir="ltr"
               style={{
                 direction: 'ltr',
-                unicodeBidi: 'isolate',
+                unicodeBidi: 'bidi-override',
                 fontSize: 'clamp(32px, 10vw, 100px)',
                 letterSpacing: '0.02em',
                 lineHeight: 1.05,
               }}
-              className="font-heading font-bold select-none mb-3 max-w-full inline-block truncate"
+              className="font-heading font-bold select-none mb-3 max-w-full inline-flex flex-row items-center justify-center truncate"
             >
               <span>H</span>
               <span className="text-[var(--red)]">A</span>
               <span>MD</span>
               <span className="text-[var(--red)]">A</span>
               <span>R</span>
-            </h1>
+            </bdo>
           </div>
 
           {/* Subtitle / Tagline in gold */}
@@ -358,28 +382,34 @@ export default function App() {
 
           <p className="max-w-md text-xs sm:text-sm text-neutral-300 font-normal mb-8 leading-relaxed opacity-90 px-4">
             {lang === 'ar'
-              ? 'سعدنايل، الشارع العام، البقاع · ملابس رجالية ونسائية بأحدث خطوط الموضة والأناقة'
-              : 'Saadnayel Main Road, Bekaa, Lebanon · Premium Men & Women Collections'}
+              ? 'سعدنايل، الشارع العام، البقاع — عنوان الفخامة والذوق الرفيع في عالم الأزياء الرجالية والنسائية.'
+              : 'Saadnayel, Main Road, Bekaa — Your destination for refined men & women fashion.'}
           </p>
 
-          {/* Smooth Scroll Buttons */}
-          <div className="flex flex-col sm:flex-row items-center gap-3 w-full max-w-xs sm:max-w-md justify-center px-4">
+          {/* Call to Actions */}
+          <div className="flex flex-wrap items-center justify-center gap-3 w-full px-2">
             <a
               href="#men"
-              className="touch-btn w-full sm:w-auto px-7 rounded-full bg-[var(--red)] hover:bg-[#a31117] text-white font-bold text-sm sm:text-base transition-all shadow-lg flex items-center justify-center gap-2"
+              className="touch-btn px-6 py-3 rounded-full bg-[var(--red)] hover:bg-[#a61217] text-white font-bold text-xs sm:text-sm tracking-wide transition-all shadow-lg hover:shadow-red-900/30 shrink-0"
             >
-              <span>{lang === 'ar' ? 'قسم رجالي' : "Men's Collection"}</span>
-              <ArrowDown className="w-4 h-4 opacity-80" />
+              {lang === 'ar' ? 'تشكيلة الرجال' : "Men's Collection"}
             </a>
-
             <a
               href="#women"
-              className="touch-btn w-full sm:w-auto px-7 rounded-full border-2 border-[var(--gold)] hover:bg-[var(--gold)] hover:text-black text-[var(--gold)] font-bold text-sm sm:text-base transition-all flex items-center justify-center gap-2"
+              className="touch-btn px-6 py-3 rounded-full bg-white/10 hover:bg-white/20 text-white font-bold text-xs sm:text-sm tracking-wide backdrop-blur-xs border border-white/20 transition-all shrink-0"
             >
-              <span>{lang === 'ar' ? 'قسم نسائي' : "Women's Collection"}</span>
-              <ArrowDown className="w-4 h-4 opacity-80" />
+              {lang === 'ar' ? 'تشكيلة النساء' : "Women's Collection"}
             </a>
           </div>
+
+          {/* Subtle scroll down indicator */}
+          <a
+            href="#men"
+            aria-label="Scroll to collection"
+            className="mt-12 text-white/50 hover:text-white transition-colors animate-bounce p-2"
+          >
+            <ArrowDown className="w-5 h-5" />
+          </a>
         </div>
       </section>
 
@@ -441,70 +471,104 @@ export default function App() {
           </div>
         )}
 
-        {/* 4:5 Product Grid: 2 cols on mobile, 3 on tablet, 4 on desktop */}
-        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3 sm:gap-4 w-full max-w-full min-w-0">
-          {displayedMenProducts.map((product) => {
-            const displayName = lang === 'ar' ? product.nameAr : (product.nameEn || product.nameAr);
+        {/* Loading State or Products Grid or Empty State */}
+        {isLoadingProducts ? (
+          <div className="py-20 flex flex-col items-center justify-center gap-3 text-center">
+            <Loader2 className="w-8 h-8 animate-spin text-[var(--red)]" />
+            <p className="text-xs text-[var(--muted)]">
+              {lang === 'ar' ? 'جاري تحميل التشكيلة من قاعدة البيانات...' : 'Loading collection...'}
+            </p>
+          </div>
+        ) : displayedMenProducts.length === 0 ? (
+          /* Friendly Empty State */
+          <div className="py-12 px-6 rounded-2xl bg-[var(--card)] border border-[var(--line)] text-center max-w-md mx-auto my-6 shadow-2xs">
+            <div className="w-14 h-14 mx-auto rounded-full bg-[var(--red)]/10 text-[var(--red)] flex items-center justify-center mb-3.5">
+              <ShoppingBag className="w-7 h-7" />
+            </div>
+            <h4 className="text-base font-bold text-[var(--ink)] mb-1.5">
+              {lang === 'ar' ? 'لا توجد منتجات معروضة حالياً' : 'No items currently on display'}
+            </h4>
+            <p className="text-xs sm:text-sm text-[var(--muted)] mb-5 leading-relaxed">
+              {lang === 'ar'
+                ? 'نقوم بتحديث التشكيلات باستمرار في متجرنا بسعدنايل. تفضلوا بالتواصل معنا مباشرة عبر واتساب لمعرفة أحدث الموديلات والأسعار.'
+                : 'We regularly refresh our collections at our Saadnayel store. Contact us directly on WhatsApp to explore our latest arrivals.'}
+            </p>
+            <a
+              href={`https://wa.me/961${menPhoneDigits}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="touch-btn inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs sm:text-sm font-bold shadow-sm transition-all"
+            >
+              <MessageCircle className="w-4 h-4" />
+              <span>{lang === 'ar' ? 'تواصل معنا عبر واتساب' : 'Chat with us on WhatsApp'}</span>
+            </a>
+          </div>
+        ) : (
+          /* 4:5 Product Grid: 2 cols on mobile, 3 on tablet, 4 on desktop */
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3 sm:gap-4 w-full max-w-full min-w-0">
+            {displayedMenProducts.map((product) => {
+              const displayName = lang === 'ar' ? product.nameAr : (product.nameEn || product.nameAr);
 
-            return (
-              <div
-                key={product.id}
-                onClick={() => setActiveViewerProduct(product)}
-                className="group flex flex-col bg-[var(--card)] border border-[var(--line)] rounded-xl overflow-hidden hover:border-[var(--muted)] transition-all shadow-2xs hover:shadow-md cursor-pointer w-full max-w-full min-w-0"
-              >
-                {/* Photo 4:5 aspect ratio */}
-                <div className="w-full aspect-[4/5] overflow-hidden bg-[var(--bg)] relative">
-                  {product.imageUrl ? (
-                    <img
-                      src={product.imageUrl}
-                      alt={displayName}
-                      loading="lazy"
-                      className="w-full h-full object-cover group-hover:scale-104 transition-transform duration-500 ease-out"
-                    />
-                  ) : (
-                    <div
-                      className="w-full h-full diagonal-placeholder flex items-center justify-center p-3 text-center"
-                      title={displayName}
-                    >
-                      <span className="text-[11px] sm:text-xs text-[var(--muted)] font-medium line-clamp-2 px-2 py-1 rounded bg-[var(--card)]/80 shadow-2xs">
-                        {displayName}
-                      </span>
-                    </div>
-                  )}
+              return (
+                <div
+                  key={product.id}
+                  onClick={() => setActiveViewerProduct(product)}
+                  className="group flex flex-col bg-[var(--card)] border border-[var(--line)] rounded-xl overflow-hidden hover:border-[var(--muted)] transition-all shadow-2xs hover:shadow-md cursor-pointer w-full max-w-full min-w-0"
+                >
+                  {/* Photo 4:5 aspect ratio */}
+                  <div className="w-full aspect-[4/5] overflow-hidden bg-[var(--bg)] relative">
+                    {product.imageUrl ? (
+                      <img
+                        src={product.imageUrl}
+                        alt={displayName}
+                        loading="lazy"
+                        className="w-full h-full object-cover group-hover:scale-104 transition-transform duration-500 ease-out"
+                      />
+                    ) : (
+                      <div
+                        className="w-full h-full diagonal-placeholder flex items-center justify-center p-3 text-center"
+                        title={displayName}
+                      >
+                        <span className="text-[11px] sm:text-xs text-[var(--muted)] font-medium line-clamp-2 px-2 py-1 rounded bg-[var(--card)]/80 shadow-2xs">
+                          {displayName}
+                        </span>
+                      </div>
+                    )}
 
-                  {/* Sold out badge */}
-                  {product.soldOut && (
-                    <div className="absolute top-2 start-2 bg-red-600 text-white text-[10px] sm:text-xs font-bold px-2 py-0.5 rounded-md shadow-md uppercase tracking-wider">
-                      {lang === 'ar' ? 'نفد' : 'Sold Out'}
-                    </div>
-                  )}
+                    {/* Sold out badge */}
+                    {product.soldOut && (
+                      <div className="absolute top-2 start-2 bg-red-600 text-white text-[10px] sm:text-xs font-bold px-2 py-0.5 rounded-md shadow-md uppercase tracking-wider">
+                        {lang === 'ar' ? 'نفد' : 'Sold Out'}
+                      </div>
+                    )}
 
-                  {/* Price overlay pill */}
-                  {product.price && (
-                    <div
-                      dir="ltr"
-                      className="absolute bottom-2 end-2 bg-black/75 backdrop-blur-xs text-[var(--gold)] text-xs font-bold px-2 py-0.5 rounded-md shadow-xs"
-                    >
-                      ${product.price.replace('$', '')}
-                    </div>
-                  )}
-                </div>
+                    {/* Price overlay pill */}
+                    {product.price && (
+                      <div
+                        dir="ltr"
+                        className="absolute bottom-2 end-2 bg-black/75 backdrop-blur-xs text-[var(--gold)] text-xs font-bold px-2 py-0.5 rounded-md shadow-xs"
+                      >
+                        ${product.price.replace('$', '')}
+                      </div>
+                    )}
+                  </div>
 
-                {/* Footer strip */}
-                <div className="p-2.5 sm:p-3 text-center border-t border-[var(--line)] bg-[var(--card)]">
-                  <p className="text-xs sm:text-sm font-semibold truncate text-[var(--ink)]">
-                    {displayName}
-                  </p>
-                  {product.category && (
-                    <p className="text-[10px] text-[var(--muted)] truncate mt-0.5">
-                      {product.category}
+                  {/* Footer strip */}
+                  <div className="p-2.5 sm:p-3 text-center border-t border-[var(--line)] bg-[var(--card)]">
+                    <p className="text-xs sm:text-sm font-semibold truncate text-[var(--ink)]">
+                      {displayName}
                     </p>
-                  )}
+                    {product.category && (
+                      <p className="text-[10px] text-[var(--muted)] truncate mt-0.5">
+                        {product.category}
+                      </p>
+                    )}
+                  </div>
                 </div>
-              </div>
-            );
-          })}
-        </div>
+              );
+            })}
+          </div>
+        )}
 
         {/* Wholesale Banner Strip */}
         <div className="mt-10 sm:mt-12 p-4 sm:p-6 rounded-2xl bg-[var(--card)] border border-[var(--line)] flex flex-col sm:flex-row items-center justify-between gap-4 text-center sm:text-start shadow-xs w-full max-w-full min-w-0 overflow-hidden">
@@ -593,159 +657,202 @@ export default function App() {
           </div>
         )}
 
-        {/* 4:5 Product Grid */}
-        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3 sm:gap-4 w-full max-w-full min-w-0">
-          {displayedWomenProducts.map((product) => {
-            const displayName = lang === 'ar' ? product.nameAr : (product.nameEn || product.nameAr);
+        {/* Loading State or Products Grid or Empty State */}
+        {isLoadingProducts ? (
+          <div className="py-20 flex flex-col items-center justify-center gap-3 text-center">
+            <Loader2 className="w-8 h-8 animate-spin text-[var(--gold)]" />
+            <p className="text-xs text-[var(--muted)]">
+              {lang === 'ar' ? 'جاري تحميل التشكيلة من قاعدة البيانات...' : 'Loading collection...'}
+            </p>
+          </div>
+        ) : displayedWomenProducts.length === 0 ? (
+          /* Friendly Empty State */
+          <div className="py-12 px-6 rounded-2xl bg-[var(--card)] border border-[var(--line)] text-center max-w-md mx-auto my-6 shadow-2xs">
+            <div className="w-14 h-14 mx-auto rounded-full bg-[var(--gold)]/10 text-[var(--gold)] flex items-center justify-center mb-3.5">
+              <ShoppingBag className="w-7 h-7" />
+            </div>
+            <h4 className="text-base font-bold text-[var(--ink)] mb-1.5">
+              {lang === 'ar' ? 'لا توجد منتجات معروضة حالياً' : 'No items currently on display'}
+            </h4>
+            <p className="text-xs sm:text-sm text-[var(--muted)] mb-5 leading-relaxed">
+              {lang === 'ar'
+                ? 'نقوم بتحديث تشكيلة حمدر نسائي باستمرار. تواصلوا معنا عبر واتساب للاطلاع على أحدث التصاميم والفساتين المتوفرة.'
+                : 'We regularly update our women collection. Contact us on WhatsApp to view available styles and dresses.'}
+            </p>
+            <a
+              href={`https://wa.me/961${womenPhoneDigits}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="touch-btn inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs sm:text-sm font-bold shadow-sm transition-all"
+            >
+              <MessageCircle className="w-4 h-4" />
+              <span>{lang === 'ar' ? 'تواصل معنا عبر واتساب' : 'Chat with us on WhatsApp'}</span>
+            </a>
+          </div>
+        ) : (
+          /* 4:5 Product Grid */
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3 sm:gap-4 w-full max-w-full min-w-0">
+            {displayedWomenProducts.map((product) => {
+              const displayName = lang === 'ar' ? product.nameAr : (product.nameEn || product.nameAr);
 
-            return (
-              <div
-                key={product.id}
-                onClick={() => setActiveViewerProduct(product)}
-                className="group flex flex-col bg-[var(--card)] border border-[var(--line)] rounded-xl overflow-hidden hover:border-[var(--muted)] transition-all shadow-2xs hover:shadow-md cursor-pointer w-full max-w-full min-w-0"
-              >
-                {/* Photo 4:5 aspect ratio */}
-                <div className="w-full aspect-[4/5] overflow-hidden bg-[var(--bg)] relative">
-                  {product.imageUrl ? (
-                    <img
-                      src={product.imageUrl}
-                      alt={displayName}
-                      loading="lazy"
-                      className="w-full h-full object-cover group-hover:scale-104 transition-transform duration-500 ease-out"
-                    />
-                  ) : (
-                    <div
-                      className="w-full h-full diagonal-placeholder flex items-center justify-center p-3 text-center"
-                      title={displayName}
-                    >
-                      <span className="text-[11px] sm:text-xs text-[var(--muted)] font-medium line-clamp-2 px-2 py-1 rounded bg-[var(--card)]/80 shadow-2xs">
-                        {displayName}
-                      </span>
-                    </div>
-                  )}
+              return (
+                <div
+                  key={product.id}
+                  onClick={() => setActiveViewerProduct(product)}
+                  className="group flex flex-col bg-[var(--card)] border border-[var(--line)] rounded-xl overflow-hidden hover:border-[var(--muted)] transition-all shadow-2xs hover:shadow-md cursor-pointer w-full max-w-full min-w-0"
+                >
+                  {/* Photo 4:5 aspect ratio */}
+                  <div className="w-full aspect-[4/5] overflow-hidden bg-[var(--bg)] relative">
+                    {product.imageUrl ? (
+                      <img
+                        src={product.imageUrl}
+                        alt={displayName}
+                        loading="lazy"
+                        className="w-full h-full object-cover group-hover:scale-104 transition-transform duration-500 ease-out"
+                      />
+                    ) : (
+                      <div
+                        className="w-full h-full diagonal-placeholder flex items-center justify-center p-3 text-center"
+                        title={displayName}
+                      >
+                        <span className="text-[11px] sm:text-xs text-[var(--muted)] font-medium line-clamp-2 px-2 py-1 rounded bg-[var(--card)]/80 shadow-2xs">
+                          {displayName}
+                        </span>
+                      </div>
+                    )}
 
-                  {product.soldOut && (
-                    <div className="absolute top-2 start-2 bg-red-600 text-white text-[10px] sm:text-xs font-bold px-2 py-0.5 rounded-md shadow-md uppercase tracking-wider">
-                      {lang === 'ar' ? 'نفد' : 'Sold Out'}
-                    </div>
-                  )}
+                    {/* Sold out badge */}
+                    {product.soldOut && (
+                      <div className="absolute top-2 start-2 bg-red-600 text-white text-[10px] sm:text-xs font-bold px-2 py-0.5 rounded-md shadow-md uppercase tracking-wider">
+                        {lang === 'ar' ? 'نفد' : 'Sold Out'}
+                      </div>
+                    )}
 
-                  {product.price && (
-                    <div
-                      dir="ltr"
-                      className="absolute bottom-2 end-2 bg-black/75 backdrop-blur-xs text-[var(--gold)] text-xs font-bold px-2 py-0.5 rounded-md shadow-xs"
-                    >
-                      ${product.price.replace('$', '')}
-                    </div>
-                  )}
-                </div>
+                    {/* Price overlay pill */}
+                    {product.price && (
+                      <div
+                        dir="ltr"
+                        className="absolute bottom-2 end-2 bg-black/75 backdrop-blur-xs text-[var(--gold)] text-xs font-bold px-2 py-0.5 rounded-md shadow-xs"
+                      >
+                        ${product.price.replace('$', '')}
+                      </div>
+                    )}
+                  </div>
 
-                <div className="p-2.5 sm:p-3 text-center border-t border-[var(--line)] bg-[var(--card)]">
-                  <p className="text-xs sm:text-sm font-semibold truncate text-[var(--ink)]">
-                    {displayName}
-                  </p>
-                  {product.category && (
-                    <p className="text-[10px] text-[var(--muted)] truncate mt-0.5">
-                      {product.category}
+                  {/* Footer strip */}
+                  <div className="p-2.5 sm:p-3 text-center border-t border-[var(--line)] bg-[var(--card)]">
+                    <p className="text-xs sm:text-sm font-semibold truncate text-[var(--ink)]">
+                      {displayName}
                     </p>
-                  )}
+                    {product.category && (
+                      <p className="text-[10px] text-[var(--muted)] truncate mt-0.5">
+                        {product.category}
+                      </p>
+                    )}
+                  </div>
                 </div>
-              </div>
-            );
-          })}
-        </div>
+              );
+            })}
+          </div>
+        )}
       </section>
 
-      {/* 6. Contact & Visit Section (#visit) */}
-      <section id="visit" className="bg-[var(--card)] border-t border-[var(--line)] py-14 sm:py-20 px-4 w-full max-w-full min-w-0 overflow-hidden">
-        <div className="max-w-6xl mx-auto w-full min-w-0">
-          <header className="text-center max-w-xl mx-auto mb-10 px-2 min-w-0">
-            <h2 className="font-heading text-2xl sm:text-4xl font-bold mb-2">
-              {lang === 'ar' ? 'تفضلوا بزيارتنا' : 'Visit Our Stores'}
+      {/* 6. Visit & Contact Section (#visit) */}
+      <section id="visit" className="py-14 sm:py-20 px-4 bg-[var(--card)] border-t border-[var(--line)] scroll-mt-20 w-full min-w-0">
+        <div className="max-w-6xl mx-auto min-w-0">
+          <div className="text-center max-w-xl mx-auto mb-10">
+            <h2 className="font-heading text-2xl sm:text-3xl font-bold mb-2">
+              {lang === 'ar' ? 'زيارتنا والتواصل' : 'Visit & Contact'}
             </h2>
-            <p className="text-sm sm:text-base text-[var(--muted)]">
+            <p className="text-xs sm:text-sm text-[var(--muted)]">
               {lang === 'ar'
-                ? 'سعدنايل، الشارع العام، البقاع، لبنان · نسعد دائماً باستقبالكم وخدمتكم'
-                : 'Saadnayel Main Road, Bekaa, Lebanon · We look forward to serving you'}
+                ? 'يسعدنا استقبالكم في محلاتنا بسعدنايل أو خدمتكم عبر الهاتف والواتساب طوال أيام الأسبوع.'
+                : 'We welcome you at our Saadnayel stores or via phone and WhatsApp anytime.'}
             </p>
-          </header>
+          </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 sm:gap-6 w-full max-w-full min-w-0">
-            {/* Store 1: Men's */}
-            <div className="p-4 sm:p-6 rounded-2xl border border-[var(--line)] bg-[var(--bg)] flex flex-col justify-between space-y-4 w-full max-w-full min-w-0 overflow-hidden">
-              <div className="min-w-0">
-                <div className="inline-block px-2.5 py-1 rounded bg-[var(--red)]/10 text-[var(--red)] text-xs font-bold mb-2">
-                  {lang === 'ar' ? 'متجر 1' : 'Store 1'}
-                </div>
-                <h3 className="font-heading text-xl font-bold mb-1 truncate">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 sm:gap-6 min-w-0">
+            {/* Contact 1: Men's */}
+            <div className="p-5 sm:p-6 rounded-2xl bg-[var(--bg)] border border-[var(--line)] space-y-4 flex flex-col justify-between shadow-2xs">
+              <div className="space-y-2">
+                <div className="inline-block px-2.5 py-1 rounded bg-[var(--red)]/10 text-[var(--red)] text-xs font-bold">
                   {lang === 'ar' ? 'حمدر رجالي' : "Hamdar Men's Wear"}
+                </div>
+                <h3 className="font-bold text-base text-[var(--ink)]">
+                  {lang === 'ar' ? 'مفرق وجملة' : 'Wholesale & Retail'}
                 </h3>
                 <p className="text-xs text-[var(--muted)]">
-                  {lang === 'ar' ? 'مفرق وجملة · أحدث الموديلات' : 'Wholesale & Retail'}
+                  {lang === 'ar' ? 'هاتف وواتساب:' : 'Phone & WhatsApp:'}
+                </p>
+                <p dir="ltr" className="font-heading text-lg font-bold text-[var(--ink)]">
+                  {menPhoneRaw}
                 </p>
               </div>
 
-              <div className="space-y-2 pt-2 w-full min-w-0">
+              <div className="space-y-2 pt-2">
                 <a
                   href={`https://wa.me/961${menPhoneDigits}`}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="touch-btn w-full py-2.5 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs flex items-center justify-center gap-2 transition-colors min-w-0 truncate"
+                  className="touch-btn w-full py-2.5 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs flex items-center justify-center gap-2 transition-colors shadow-xs"
                 >
-                  <MessageCircle className="w-4 h-4 shrink-0" />
-                  <span className="truncate">{lang === 'ar' ? `واتساب: ${menPhoneRaw}` : `WhatsApp: ${menPhoneRaw}`}</span>
+                  <MessageCircle className="w-4 h-4" />
+                  <span>{lang === 'ar' ? 'مراسلة واتساب' : 'WhatsApp'}</span>
                 </a>
                 <a
                   href={`tel:+961${menPhoneDigits}`}
-                  className="touch-btn w-full py-2.5 px-3 rounded-xl border border-[var(--line)] bg-[var(--card)] hover:border-[var(--muted)] font-bold text-xs flex items-center justify-center gap-2 transition-colors min-w-0 truncate"
+                  className="touch-btn w-full py-2.5 px-3 rounded-xl border border-[var(--line)] hover:border-[var(--muted)] text-[var(--ink)] font-semibold text-xs flex items-center justify-center gap-2 transition-colors"
                 >
-                  <PhoneCall className="w-4 h-4 shrink-0" />
-                  <span className="truncate">{lang === 'ar' ? `اتصال: ${menPhoneRaw}` : `Call: ${menPhoneRaw}`}</span>
+                  <PhoneCall className="w-3.5 h-3.5" />
+                  <span>{lang === 'ar' ? 'اتصال مباشر' : 'Call Store'}</span>
                 </a>
               </div>
             </div>
 
-            {/* Store 2: Women's */}
-            <div className="p-4 sm:p-6 rounded-2xl border border-[var(--line)] bg-[var(--bg)] flex flex-col justify-between space-y-4 w-full max-w-full min-w-0 overflow-hidden">
-              <div className="min-w-0">
-                <div className="inline-block px-2.5 py-1 rounded bg-[var(--gold)]/15 text-[var(--gold)] text-xs font-bold mb-2">
-                  {lang === 'ar' ? 'متجر 2' : 'Store 2'}
-                </div>
-                <h3 className="font-heading text-xl font-bold mb-1 truncate">
+            {/* Contact 2: Women's */}
+            <div className="p-5 sm:p-6 rounded-2xl bg-[var(--bg)] border border-[var(--line)] space-y-4 flex flex-col justify-between shadow-2xs">
+              <div className="space-y-2">
+                <div className="inline-block px-2.5 py-1 rounded bg-[var(--gold)]/15 text-[var(--gold)] text-xs font-bold">
                   {lang === 'ar' ? 'حمدر نسائي' : "Hamdar Women's Wear"}
+                </div>
+                <h3 className="font-bold text-base text-[var(--ink)]">
+                  {lang === 'ar' ? 'أحدث الأزياء النسائية' : 'Latest Women Fashion'}
                 </h3>
                 <p className="text-xs text-[var(--muted)]">
-                  {lang === 'ar' ? 'أرقى تشكيلة فساتين وأطقم' : 'Fine Women Collections'}
+                  {lang === 'ar' ? 'هاتف وواتساب:' : 'Phone & WhatsApp:'}
+                </p>
+                <p dir="ltr" className="font-heading text-lg font-bold text-[var(--ink)]">
+                  {womenPhoneRaw}
                 </p>
               </div>
 
-              <div className="space-y-2 pt-2 w-full min-w-0">
+              <div className="space-y-2 pt-2">
                 <a
                   href={`https://wa.me/961${womenPhoneDigits}`}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="touch-btn w-full py-2.5 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs flex items-center justify-center gap-2 transition-colors min-w-0 truncate"
+                  className="touch-btn w-full py-2.5 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs flex items-center justify-center gap-2 transition-colors shadow-xs"
                 >
-                  <MessageCircle className="w-4 h-4 shrink-0" />
-                  <span className="truncate">{lang === 'ar' ? `واتساب: ${womenPhoneRaw}` : `WhatsApp: ${womenPhoneRaw}`}</span>
+                  <MessageCircle className="w-4 h-4" />
+                  <span>{lang === 'ar' ? 'مراسلة واتساب' : 'WhatsApp'}</span>
                 </a>
                 <a
                   href={`tel:+961${womenPhoneDigits}`}
-                  className="touch-btn w-full py-2.5 px-3 rounded-xl border border-[var(--line)] bg-[var(--card)] hover:border-[var(--muted)] font-bold text-xs flex items-center justify-center gap-2 transition-colors min-w-0 truncate"
+                  className="touch-btn w-full py-2.5 px-3 rounded-xl border border-[var(--line)] hover:border-[var(--muted)] text-[var(--ink)] font-semibold text-xs flex items-center justify-center gap-2 transition-colors"
                 >
-                  <PhoneCall className="w-4 h-4 shrink-0" />
-                  <span className="truncate">{lang === 'ar' ? `اتصال: ${womenPhoneRaw}` : `Call: ${womenPhoneRaw}`}</span>
+                  <PhoneCall className="w-3.5 h-3.5" />
+                  <span>{lang === 'ar' ? 'اتصال مباشر' : 'Call Store'}</span>
                 </a>
               </div>
             </div>
 
-            {/* Location & Map Card */}
-            <div className="p-4 sm:p-6 rounded-2xl border border-[var(--line)] bg-[var(--bg)] flex flex-col justify-between space-y-4 w-full max-w-full min-w-0 overflow-hidden">
-              <div className="min-w-0">
-                <div className="inline-block px-2.5 py-1 rounded bg-blue-500/10 text-blue-500 text-xs font-bold mb-2">
-                  {lang === 'ar' ? 'الموقع' : 'Location'}
+            {/* Contact 3: Location */}
+            <div className="p-5 sm:p-6 rounded-2xl bg-[var(--bg)] border border-[var(--line)] space-y-4 flex flex-col justify-between shadow-2xs">
+              <div className="space-y-2">
+                <div className="inline-block px-2.5 py-1 rounded bg-blue-500/10 text-blue-500 text-xs font-bold">
+                  {lang === 'ar' ? 'موقعنا' : 'Store Location'}
                 </div>
-                <h3 className="font-heading text-xl font-bold mb-1 truncate">
+                <h3 className="font-bold text-base text-[var(--ink)]">
                   {lang === 'ar' ? 'سعدنايل، البقاع' : 'Saadnayel, Bekaa'}
                 </h3>
                 <p className="text-xs text-[var(--muted)]">
@@ -770,23 +877,30 @@ export default function App() {
         </div>
       </section>
 
-      {/* 7. Footer */}
+      {/* 7. Footer with strictly LTR HAMDAR Wordmark */}
       <footer className="bg-[var(--dark)] text-neutral-300 py-12 px-4 border-t border-neutral-800 safe-bottom w-full max-w-full overflow-hidden">
         <div className="max-w-6xl mx-auto flex flex-col items-center justify-center text-center space-y-5 w-full min-w-0">
-          {/* Logo with strict LTR inline style */}
+          {/* Logo with strict bdo LTR override */}
           <a
             href="#"
-            className="font-heading text-2xl font-bold tracking-[0.06em] select-none text-white inline-block"
-            style={{ direction: 'ltr', unicodeBidi: 'isolate' }}
+            dir="ltr"
+            className="select-none text-white inline-flex flex-row items-center"
+            style={{ direction: 'ltr', unicodeBidi: 'bidi-override' }}
           >
-            <span>H</span>
-            <span className="text-[var(--red)]">A</span>
-            <span>MD</span>
-            <span className="text-[var(--red)]">A</span>
-            <span>R</span>
+            <bdo
+              dir="ltr"
+              className="inline-flex flex-row items-center font-heading text-2xl font-bold tracking-[0.06em]"
+              style={{ direction: 'ltr' }}
+            >
+              <span>H</span>
+              <span className="text-[var(--red)]">A</span>
+              <span>MD</span>
+              <span className="text-[var(--red)]">A</span>
+              <span>R</span>
+            </bdo>
           </a>
 
-          {/* Instagram link pill (guaranteed max-w-full and no overflow) */}
+          {/* Instagram link pill */}
           <div className="w-full max-w-full overflow-hidden flex justify-center px-2">
             <a
               href={instagramUrl}
@@ -858,11 +972,9 @@ export default function App() {
                 <div className="w-8 h-8 rounded-full bg-[var(--red)]/10 text-[var(--red)] flex items-center justify-center font-bold text-xs shrink-0">
                   رجالي
                 </div>
-                <div className="min-w-0 flex-1 truncate">
+                <div className="min-w-0">
                   <p className="text-xs font-bold text-[var(--ink)] truncate">حمدر رجالي</p>
-                  <p className="text-[10px] text-[var(--muted)] truncate" dir="ltr">
-                    {menPhoneRaw}
-                  </p>
+                  <p dir="ltr" className="text-[11px] text-[var(--muted)] truncate">{menPhoneRaw}</p>
                 </div>
               </a>
 
@@ -876,60 +988,68 @@ export default function App() {
                 <div className="w-8 h-8 rounded-full bg-[var(--gold)]/15 text-[var(--gold)] flex items-center justify-center font-bold text-xs shrink-0">
                   نسائي
                 </div>
-                <div className="min-w-0 flex-1 truncate">
+                <div className="min-w-0">
                   <p className="text-xs font-bold text-[var(--ink)] truncate">حمدر نسائي</p>
-                  <p className="text-[10px] text-[var(--muted)] truncate" dir="ltr">
-                    {womenPhoneRaw}
-                  </p>
+                  <p dir="ltr" className="text-[11px] text-[var(--muted)] truncate">{womenPhoneRaw}</p>
                 </div>
               </a>
             </div>
           )}
 
-          {/* Toggle trigger button */}
+          {/* Floating Action Button */}
           <button
             onClick={() => setIsWaPopupOpen(!isWaPopupOpen)}
-            className="w-13 h-13 rounded-full bg-emerald-500 hover:bg-emerald-600 text-white flex items-center justify-center shadow-xl hover:scale-105 active:scale-95 transition-all cursor-pointer"
-            aria-label="Open WhatsApp Chat"
+            className="touch-btn w-14 h-14 rounded-full bg-emerald-500 hover:bg-emerald-600 text-white shadow-xl hover:shadow-emerald-500/30 flex items-center justify-center transition-all cursor-pointer relative"
+            aria-label="تواصل معنا عبر واتساب"
           >
-            <MessageCircle className="w-6 h-6 fill-current" />
+            <MessageCircle className="w-7 h-7" />
+            <span className="absolute -top-1 -end-1 w-3.5 h-3.5 rounded-full bg-red-500 border-2 border-white animate-pulse" />
           </button>
         </div>
       </div>
 
-      {/* 9. Product Detail Viewer Modal */}
+      {/* 9. Product Full Detail Viewer Modal */}
       {activeViewerProduct && (
         <div
           role="dialog"
           aria-modal="true"
-          className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-3 sm:p-6 w-full max-w-full overflow-y-auto"
-          dir={lang === 'ar' ? 'rtl' : 'ltr'}
+          className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-3 sm:p-6 overflow-y-auto"
+          style={{ touchAction: 'pan-y' }}
           onClick={() => setActiveViewerProduct(null)}
         >
           <div
-            className="bg-[var(--card)] border border-[var(--line)] rounded-2xl max-w-lg w-full overflow-hidden shadow-2xl relative animate-in zoom-in-95 duration-200 min-w-0"
             onClick={(e) => e.stopPropagation()}
+            className="relative bg-[var(--card)] border border-[var(--line)] rounded-2xl max-w-lg w-full overflow-hidden shadow-2xl animate-in zoom-in-95 duration-150 flex flex-col max-h-[90vh]"
+            dir={lang === 'ar' ? 'rtl' : 'ltr'}
           >
             {/* Close button */}
             <button
               onClick={() => setActiveViewerProduct(null)}
-              className="absolute top-3 end-3 z-10 w-9 h-9 rounded-full bg-black/60 text-white hover:bg-black/80 flex items-center justify-center transition-colors cursor-pointer"
+              className="absolute top-3 end-3 z-10 w-9 h-9 rounded-full bg-black/60 text-white flex items-center justify-center hover:bg-black/80 transition-colors cursor-pointer"
               aria-label="Close"
             >
               <X className="w-5 h-5" />
             </button>
 
-            {/* Product Image */}
-            <div className="w-full aspect-[4/5] max-h-[60vh] bg-[var(--bg)] relative overflow-hidden">
+            {/* Photo with Prev / Next navigators */}
+            <div className="relative w-full aspect-[4/5] bg-[var(--bg)] overflow-hidden shrink-0">
               {activeViewerProduct.imageUrl ? (
                 <img
                   src={activeViewerProduct.imageUrl}
-                  alt={lang === 'ar' ? activeViewerProduct.nameAr : (activeViewerProduct.nameEn || activeViewerProduct.nameAr)}
+                  alt={
+                    lang === 'ar'
+                      ? activeViewerProduct.nameAr
+                      : (activeViewerProduct.nameEn || activeViewerProduct.nameAr)
+                  }
                   className="w-full h-full object-cover"
                 />
               ) : (
-                <div className="w-full h-full diagonal-placeholder flex items-center justify-center p-6 text-center text-sm text-[var(--muted)]">
-                  {lang === 'ar' ? activeViewerProduct.nameAr : (activeViewerProduct.nameEn || activeViewerProduct.nameAr)}
+                <div className="w-full h-full diagonal-placeholder flex items-center justify-center p-6 text-center">
+                  <span className="text-sm text-[var(--muted)] font-medium">
+                    {lang === 'ar'
+                      ? activeViewerProduct.nameAr
+                      : (activeViewerProduct.nameEn || activeViewerProduct.nameAr)}
+                  </span>
                 </div>
               )}
 
@@ -938,72 +1058,76 @@ export default function App() {
                 <>
                   <button
                     onClick={handlePrevProduct}
-                    className="absolute top-1/2 start-3 -translate-y-1/2 w-9 h-9 rounded-full bg-black/50 hover:bg-black/75 text-white flex items-center justify-center cursor-pointer transition-colors"
-                    aria-label="Previous Product"
+                    className="touch-btn absolute start-3 top-1/2 -translate-y-1/2 w-10 h-10 rounded-full bg-black/50 hover:bg-black/80 text-white flex items-center justify-center transition-colors cursor-pointer"
+                    aria-label="Previous"
                   >
-                    <ChevronRight className="w-5 h-5 rtl:rotate-0 ltr:rotate-180" />
+                    <ChevronRight className="w-5 h-5" />
                   </button>
                   <button
                     onClick={handleNextProduct}
-                    className="absolute top-1/2 end-3 -translate-y-1/2 w-9 h-9 rounded-full bg-black/50 hover:bg-black/75 text-white flex items-center justify-center cursor-pointer transition-colors"
-                    aria-label="Next Product"
+                    className="touch-btn absolute end-3 top-1/2 -translate-y-1/2 w-10 h-10 rounded-full bg-black/50 hover:bg-black/80 text-white flex items-center justify-center transition-colors cursor-pointer"
+                    aria-label="Next"
                   >
-                    <ChevronLeft className="w-5 h-5 rtl:rotate-0 ltr:rotate-180" />
+                    <ChevronLeft className="w-5 h-5" />
                   </button>
                 </>
               )}
-
-              {activeViewerProduct.soldOut && (
-                <div className="absolute top-3 start-3 bg-red-600 text-white text-xs font-bold px-2.5 py-1 rounded-md shadow-md">
-                  {lang === 'ar' ? 'نفد من المتجر' : 'Sold Out'}
-                </div>
-              )}
             </div>
 
-            {/* Product Details & WhatsApp Inquiry Button */}
-            <div className="p-4 sm:p-5 space-y-3 min-w-0">
-              <div className="flex items-start justify-between gap-3 min-w-0">
-                <div className="min-w-0 flex-1">
-                  <h3 className="font-heading text-lg sm:text-xl font-bold text-[var(--ink)] truncate">
-                    {lang === 'ar' ? activeViewerProduct.nameAr : (activeViewerProduct.nameEn || activeViewerProduct.nameAr)}
+            {/* Details strip */}
+            <div className="p-4 sm:p-5 flex flex-col gap-3 overflow-y-auto">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <span className="text-[11px] font-bold text-[var(--gold)] uppercase tracking-wider">
+                    {activeViewerProduct.store === 'men'
+                      ? (lang === 'ar' ? 'حمدر رجالي' : "Men's Wear")
+                      : (lang === 'ar' ? 'حمدر نسائي' : "Women's Wear")}
+                  </span>
+                  <h3 className="font-heading text-lg sm:text-xl font-bold text-[var(--ink)] mt-0.5">
+                    {lang === 'ar'
+                      ? activeViewerProduct.nameAr
+                      : (activeViewerProduct.nameEn || activeViewerProduct.nameAr)}
                   </h3>
-                  {activeViewerProduct.nameEn && lang === 'ar' && (
-                    <p className="text-xs text-[var(--muted)] truncate" dir="ltr">
-                      {activeViewerProduct.nameEn}
-                    </p>
-                  )}
                   {activeViewerProduct.category && (
-                    <span className="inline-block mt-1 px-2 py-0.5 rounded bg-[var(--bg)] border border-[var(--line)] text-[10px] text-[var(--muted)]">
+                    <p className="text-xs text-[var(--muted)] mt-0.5">
                       {activeViewerProduct.category}
-                    </span>
+                    </p>
                   )}
                 </div>
 
                 {activeViewerProduct.price && (
-                  <div className="text-end shrink-0" dir="ltr">
-                    <span className="text-xl sm:text-2xl font-bold text-[var(--gold)]">
-                      ${activeViewerProduct.price.replace('$', '')}
-                    </span>
+                  <div dir="ltr" className="font-heading text-xl font-bold text-[var(--gold)] shrink-0">
+                    ${activeViewerProduct.price.replace('$', '')}
                   </div>
                 )}
               </div>
+
+              {activeViewerProduct.soldOut && (
+                <div className="p-2 rounded-lg bg-red-500/10 border border-red-500/20 text-red-500 text-xs font-bold text-center">
+                  {lang === 'ar' ? 'هذا المنتج نفد حالياً من المتجر' : 'Currently sold out'}
+                </div>
+              )}
 
               {/* Inquiry Action */}
               <a
                 href={getProductWaLink(activeViewerProduct)}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="touch-btn w-full py-3.5 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-sm transition-all shadow-md flex items-center justify-center gap-2 min-w-0"
+                className="touch-btn w-full py-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-sm flex items-center justify-center gap-2 shadow-md transition-all mt-1"
               >
-                <MessageCircle className="w-5 h-5 shrink-0" />
-                <span className="truncate">{lang === 'ar' ? 'استفسر أو اطلب عبر واتساب' : 'Inquire / Order on WhatsApp'}</span>
+                <MessageCircle className="w-4 h-4" />
+                <span>
+                  {lang === 'ar'
+                    ? 'الاستفسار والطلب عبر واتساب'
+                    : 'Inquire & Order via WhatsApp'}
+                </span>
               </a>
             </div>
           </div>
         </div>
       )}
 
-      {/* 10. Admin Modal */}
+      {/* 10. Admin Modal Panel */}
       <AdminModal
         isOpen={isAdminOpen}
         onClose={handleCloseAdmin}
